@@ -130,6 +130,7 @@ class ManagementMixin:
                     for section,value in desired['sections'].items():
                         current=self.central_read(section,sid)['value'];wanted=copy.deepcopy(value)
                         if section=='rules':
+                            native_rules(current,[])  # Reject ambiguous server markers before replacing native rules.
                             # Preserve the current live-managed block while replacing native rules.
                             from operations import BEGIN,END
                             managed=[];inside=False

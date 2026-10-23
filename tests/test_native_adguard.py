@@ -38,6 +38,12 @@ class CleanAdGuardTests(unittest.TestCase):
             result=store.apply_management()
             self.assertFalse(result['results']['0']['ok']);self.assertTrue(result['results']['1']['ok'],result['results']['1'])
             actual=store.agh('dns_info',settings=store.selected('1'))
-            self.assertEqual(actual['upstream_dns'],['1.1.1.1']);self.assertEqual(actual['port'],5354)
+            self.assertEqual(actual['upstream_dns'],['1.1.1.1']);self.assertEqual(store.agh('status',settings=store.selected('1'))['dns_port'],5354)
             self.assertTrue(any(r['domain']=='venguard-test.home.arpa' for r in store.agh('rewrite/list',settings=store.selected('1'))))
+            original=store.agh
+            def no_reconfiguration(path,*args,**kwargs):
+                if path in ('dns_config','clients/add','clients/delete','rewrite/add','rewrite/delete'):raise AssertionError('Unchanged profile repeated a mutation: '+path)
+                return original(path,*args,**kwargs)
+            store.agh=no_reconfiguration
+            repeated=store.apply_management();self.assertTrue(repeated['results']['1']['ok'],repeated['results']['1'])
             self.assertEqual(Store(folder).desired['sections']['dns']['upstream_dns'],['1.1.1.1'])
