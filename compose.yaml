@@ -1,0 +1,28 @@
+services:
+  venguard:
+    build: .
+    container_name: venguard
+    restart: unless-stopped
+    ports:
+      - "${VENGUARD_BIND:-0.0.0.0}:${VENGUARD_PORT:-8098}:8098"
+    environment:
+      VENGUARD_PASSWORD: ${VENGUARD_PASSWORD:?Start eerst met bash start.sh of maak zelf een .env}
+      TZ: Europe/Amsterdam
+    volumes:
+      - venguard-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,noexec,nosuid
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+    cpus: 1.0
+    logging:
+      driver: json-file
+      options:
+        max-size: 5m
+        max-file: "2"
+volumes:
+  venguard-data:

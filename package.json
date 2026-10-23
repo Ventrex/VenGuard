@@ -1,0 +1,1 @@
+{"name":"venguard","private":true,"scripts":{"dev":"python3 scripts/preview.py"}}

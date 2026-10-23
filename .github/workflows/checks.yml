@@ -1,0 +1,54 @@
+name: Controle & Docker-test
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Regelverwerking, opslag en AdGuard API-koppeling
+        run: python3 -m unittest discover -s tests -v
+      - name: JavaScript en installatiescripts
+        run: |
+          node --check app/static/app.js
+          bash -n start.sh update.sh
+      - name: Bouw productie-image
+        run: docker build -t venguard:test .
+      - name: Start productiecontainer met Compose
+        run: |
+          printf 'VENGUARD_PASSWORD=ci-only-disposable-test-password\n' > .env
+          docker compose up -d --build
+          for attempt in $(seq 1 30); do
+            if [ "$(docker inspect --format '{{.State.Health.Status}}' venguard)" = healthy ]; then
+              curl --fail http://127.0.0.1:8098/health
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose logs
+          exit 1
+      - name: Controleer productie-authenticatie
+        run: |
+          python3 - <<'PY'
+          import json, urllib.request, urllib.error
+          base='http://127.0.0.1:8098'
+          try:
+              urllib.request.urlopen(base+'/api/state')
+              raise SystemExit('Beheer-API stond open!')
+          except urllib.error.HTTPError as e:
+              assert e.code == 401, e.code
+          session=json.load(urllib.request.urlopen(base+'/api/session'))
+          assert session['authenticated'] is False
+          PY
+      - name: Opruimen
+        if: always()
+        run: docker compose down || true

@@ -1,0 +1,10 @@
+.env
+__pycache__/
+*.pyc
+.preview/
+node_modules/
+venv/
+*.zip
+backup/
+backups/
+data/

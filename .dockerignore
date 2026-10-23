@@ -1,0 +1,13 @@
+.git
+.env
+__pycache__
+*.pyc
+tests
+.preview
+node_modules
+backup
+backups
+data
+scripts
+package.json
+.github
