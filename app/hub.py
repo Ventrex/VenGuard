@@ -235,7 +235,7 @@ class HubMixin:
                 try:
                     if kind(server)=='pihole':
                         for filename,whitelist in [('pihole-block.txt',False),('pihole-allow.txt',True)]:self.ensure_feed(server,self.feed_url(filename),whitelist)
-                        self.agh('filtering/refresh',{'whitelist':False},settings=server)
+                        self.agh('filtering/refresh',{'whitelist':False,'verify_urls':[self.feed_url('pihole-block.txt'),self.feed_url('pihole-allow.txt')]},settings=server)
                     else:
                         self.ensure_feed(server,self.feed_url(),False)
                         self.agh('filtering/refresh',{'whitelist':False},settings=server)

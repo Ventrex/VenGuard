@@ -4,6 +4,7 @@ import json
 import os
 import tempfile
 import threading
+import time
 import unittest
 import urllib.parse
 import urllib.request
@@ -38,6 +39,7 @@ class FTL(BaseHTTPRequestHandler):
             for item in s.lists:
                 if item['enabled']:
                     with urllib.request.urlopen(item['address'],timeout=3) as r:s.downloaded[item['type']]=r.read().decode()
+                    item.update(date_updated=int(time.time()),status=1)
             s.gravity+=1;value=b'[i] gravity completed\n';ctype='text/plain'
         elif path=='lists':
             if self.command=='POST':s.lists.append({**body,'id':len(s.lists)+1,'type':query.get('type',['block'])[0]})
@@ -83,6 +85,14 @@ class PiHoleTests(unittest.TestCase):
         self.assertEqual(self.ftl.gravity,1);self.assertIn('||ads.example.net^',self.ftl.downloaded['block']);self.assertIn('@@||content.example.net^',self.ftl.downloaded['allow'])
         self.assertNotIn('@@',self.ftl.downloaded['block']);self.assertEqual(len(self.ftl.lists),2)
         self.store.publish_all();self.assertEqual(len(self.ftl.lists),2)
+    def test_gravity_without_verified_database_update_is_not_success(self):
+        self.ftl.lists=[{'address':'https://example.org/list','type':'block','enabled':True,'status':0,'date_updated':0}]
+        original=self.store.pihole.call
+        def busy(server,path,*args,**kwargs):
+            if path=='action/gravity':return {'ok':True,'server_time':time.time()}
+            return original(server,path,*args,**kwargs)
+        with patch.object(self.store.pihole,'call',side_effect=busy):
+            with self.assertRaisesRegex(ValueError,'bevestigt'):self.store.pihole.refresh(self.pi)
     def test_exact_live_rule_does_not_replace_foreign_rules_or_require_gravity(self):
         foreign={'domain':'keep.example.net','type':'allow','kind':'exact','comment':'Existing user rule','enabled':True,'groups':[2]};self.ftl.domains=[copy.deepcopy(foreign)]
         self.store.config['rules']=[{'domain':'checkout.example.net','action':'allow','match':'exact','enabled':True}]

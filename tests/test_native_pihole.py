@@ -3,6 +3,7 @@ import json
 import os
 import tempfile
 import threading
+import time
 import unittest
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -27,7 +28,12 @@ class NativePiHoleTest(unittest.TestCase):
                 for item in store.pihole.call(store.primary(),'lists').get('lists',[]):
                     store.pihole.call(store.primary(),'lists/'+urllib.parse.quote(item['address'],safe='')+'?type='+item.get('type','block'),method='DELETE')
                 store.caches={'fixture':{'rules':['||ads.integration.test^','@@||content.integration.test^']}};store.rebuild(False)
-                result=store.publish_all();self.assertTrue(result['ok'],result)
+                deadline=time.monotonic()+90
+                while True:
+                    result=store.publish_all()
+                    if result['ok'] or time.monotonic()>deadline:break
+                    time.sleep(2)
+                self.assertTrue(result['ok'],result)
                 lists=store.pihole.call(store.primary(),'lists').get('lists',[]);self.assertEqual(len(lists),2);self.assertEqual({r['type'] for r in lists},{'allow','block'})
                 # Real Gravity must parse each dedicated ABP subscription, including its suffix semantics.
                 self.assertTrue(all((r.get('number',0)+r.get('abp_entries',0))>0 for r in lists),lists)

@@ -1,5 +1,6 @@
 """Pi-hole v6 adapter. Only capabilities actually shared with AdGuard are mapped."""
 import hashlib
+import email.utils
 import json
 import threading
 import time
@@ -27,7 +28,11 @@ class PiHole:
             if len(raw)>8*1024*1024:raise ValueError('Pi-hole-antwoord te groot.')
             if stream:
                 if b'<html' in raw[:300].lower() or b'<!doctype' in raw[:300].lower():raise ValueError('Pi-hole geeft een webpagina terug; gebruik het beheeradres van Pi-hole v6.')
-                return {'ok':True}
+                text=raw.decode('utf-8',errors='replace').lower()
+                if 'gravity failed' in text or 'gravity is already running' in text or 'unable to acquire' in text:raise ValueError('Pi-hole heeft Gravity nog niet afgerond of geweigerd omdat een andere update loopt. De lijststatus is nog niet bevestigd.')
+                try:server_time=email.utils.parsedate_to_datetime(response.headers.get('Date','')).timestamp()
+                except (ValueError,TypeError):server_time=time.time()
+                return {'ok':True,'server_time':server_time}
             if not raw.strip() and (method or ('POST' if body is not None else 'GET'))=='DELETE':return {}
             try:result=json.loads(raw)
             except (ValueError,UnicodeError):raise ValueError('Pi-hole geeft geen JSON terug; controleer het beheeradres en gebruik Pi-hole v6.')
@@ -67,6 +72,17 @@ class PiHole:
           'whitelist_filters':[self.list_item(x) for x in data if x.get('type')=='allow'],'user_rules':[]}
     @staticmethod
     def list_item(x):return {**x,'url':x['address'],'name':x.get('comment') or x['address'],'rules_count':x.get('number',0),'last_updated':x.get('date_updated')}
+    def refresh(self,server,verify_urls=None):
+        before=self.call(server,'lists').get('lists',[])
+        if verify_urls is not None and set(verify_urls)-{r['address'] for r in before if r.get('enabled')}:raise ValueError('Pi-hole bevestigt niet alle VenGuard-abonnementen; probeer de koppeling opnieuw.')
+        expected={(r['address'],r.get('type','block')) for r in before if r.get('enabled') and (verify_urls is None or r['address'] in verify_urls)}
+        result=self.call(server,'action/gravity',{},stream=True)
+        after={(r['address'],r.get('type','block')):r for r in self.call(server,'lists').get('lists',[])}
+        for key in expected:
+            item=after.get(key,{})
+            if not item.get('enabled') or item.get('status') not in (1,2) or item.get('date_updated',0)<result['server_time']-2:
+                raise ValueError('Pi-hole bevestigt nog geen actuele succesvolle download voor alle gekozen lijsten. Mogelijk loopt Gravity nog of is een bron niet bereikbaar; de volgende ronde probeert opnieuw.')
+        return {'ok':True,'verified':len(expected)}
     def adapter(self,server,path,body=None,query=None,method=None):
         if path=='status':
             status=self.call(server,'dns/blocking');version=self.call(server,'info/version').get('version',{}).get('ftl',{}).get('local',{}).get('version','v6')
@@ -81,7 +97,7 @@ class PiHole:
             target='lists/'+urllib.parse.quote(body['url'],safe='')+'?type='+listtype
             if path.endswith('remove_url'):return self.call(server,target,method='DELETE')
             value=body['data'];return self.call(server,target,{'comment':current.get('comment') or '', 'groups':current.get('groups',[0]),'enabled':value['enabled']},method='PUT')
-        if path=='filtering/refresh':return self.call(server,'action/gravity',{},stream=True)
+        if path=='filtering/refresh':return self.refresh(server,(body or {}).get('verify_urls'))
         if path=='querylog':
             rows=self.call(server,'queries?length=1000').get('queries',[]);out=[]
             blocked={'GRAVITY','REGEX','DENYLIST','GRAVITY_CNAME','REGEX_CNAME','DENYLIST_CNAME','EXTERNAL_BLOCKED_IP','EXTERNAL_BLOCKED_NULL','EXTERNAL_BLOCKED_NXRA','DBBUSY','SPECIAL_DOMAIN'}
