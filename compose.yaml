@@ -3,6 +3,7 @@ services:
     build: .
     container_name: venguard
     restart: unless-stopped
+    init: true
     ports:
       - "${VENGUARD_BIND:-0.0.0.0}:${VENGUARD_PORT:-8098}:8098"
     environment:

@@ -14,8 +14,11 @@ class DemoHandler(Handler):
     def auth(self): return True
 
 class DemoStore(Store):
-    def agh(self,path,body=None,query=None,settings=None):
+    def agh(self,path,body=None,query=None,settings=None,method=None):
         if path=='status': return {'version':'DEMO — geen echte AdGuard','protection_enabled':True}
+        if path=='dns_info':return {'upstream_dns':['https://dns.example.org/dns-query'],'bootstrap_dns':['1.1.1.1']}
+        if path=='rewrite/list':return [{'domain':'nas.home.arpa','answer':'192.0.2.20','enabled':True}]
+        if path=='querylog/config':return {'enabled':True,'interval':86400000,'anonymize_client_ip':False}
         if path=='filtering/status': return {'enabled':True,'filters':[],'user_rules':[]}
         if path=='clients': return {'clients':[]}
         if path=='querylog':
@@ -26,7 +29,10 @@ class DemoStore(Store):
 if __name__=='__main__':
     import os
     store=DemoStore(tempfile.mkdtemp(prefix='venguard-ui-demo-'))
-    store.config['adguard']['url']='http://demo-adguard.invalid'
+    store.config['servers']=[{'id':'one','name':'NUC — demo','url':'http://192.0.2.10:3000','username':'','password':'','enabled':True,'dns_host':'192.0.2.10','dns_port':53},{'id':'two','name':'ZimaBoard — demo','url':'http://192.0.2.11:3000','username':'','password':'','enabled':True,'dns_host':'192.0.2.11','dns_port':53}]
+    store.config['primary_id']='one';store.align_primary()
+    import time
+    store.health={'one':{'checked_at':utc(),'checked_epoch':time.time(),'api_ok':True,'protection_enabled':True,'version':'DEMO','dns':{'ok':True,'ms':2.4,'error':''}},'two':{'checked_at':utc(),'checked_epoch':time.time(),'api_ok':False,'protection_enabled':None,'dns':{'ok':False,'ms':None,'error':'Demonstratie van een uitgevallen server.'}}}
     store.config['public_url']='http://demo-venguard.invalid:8098'
     store.config['auto_sync']=False
     store.config['sources'][0]['name']='DEMO — HaGeZi Light (testselectie)'

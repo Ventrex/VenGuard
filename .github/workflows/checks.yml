@@ -20,6 +20,8 @@ jobs:
       - name: JavaScript en installatiescripts
         run: |
           node --check app/static/app.js
+          node --check app/static/hub.js
+          node --check app/static/theme.js
           bash -n start.sh update.sh
       - name: Bouw productie-image
         run: docker build -t venguard:test .
@@ -49,6 +51,10 @@ jobs:
           session=json.load(urllib.request.urlopen(base+'/api/session'))
           assert session['authenticated'] is False
           PY
+      - name: Test de gebundelde echte AdGuard Sync-engine
+        run: |
+          docker cp tests/test_native_sync.py venguard:/tmp/test_native_sync.py
+          docker exec -e ADGUARD_SYNC_BINARY=/usr/local/bin/adguardhome-sync venguard python3 /tmp/test_native_sync.py
       - name: Opruimen
         if: always()
         run: docker compose down || true
