@@ -50,6 +50,9 @@ def now_iso():return datetime.now(timezone.utc).isoformat(timespec='seconds')
 def error_text(e):
     if isinstance(e,urllib.error.HTTPError):return f'Beheer-API antwoordt met HTTP {e.code}; controleer adres en inloggegevens.'
     if isinstance(e,ValueError):return str(e)
+    reason=getattr(e,'reason',e)
+    if isinstance(reason,(TimeoutError,socket.timeout)):return 'Beheer-API: verbinding verlopen; controleer bereikbaarheid vanaf de VenGuard-container.'
+    if isinstance(reason,ConnectionRefusedError):return 'Beheer-API: verbinding geweigerd; controleer de beheerpoort en of AdGuard draait.'
     return 'Geen verbinding of ongeldige reactie; controleer adres, poort, certificaat en netwerk.'
 def digest(value):return hashlib.sha256(json.dumps(value,sort_keys=True,separators=(',',':')).encode()).hexdigest()
 def write_private(path,value):
@@ -165,22 +168,47 @@ class HubMixin:
             return {'servers':items,'primary_id':self.config.get('primary_id') or (items[0]['id'] if items else ''),
                     'sync':copy.deepcopy(self.sync_status),'features':[{'id':k,'name':v[0]} for k,v in FEATURES.items()],
                     'checked':self.health_checked,'binary_available':bool(shutil.which(os.getenv('ADGUARD_SYNC_BINARY','adguardhome-sync')))}
+    def read_controls(self):
+        origin=self.primary();status=self.agh('status',settings=origin);filtering=self.agh('filtering/status',settings=origin)
+        result={'protection_enabled':status.get('protection_enabled'),'filtering_enabled':filtering.get('enabled'),'controls_checked_at':now_iso(),'controls_epoch':time.time()}
+        with self.lock:self.health.setdefault(origin['id'],{}).update(result)
+        return result
     def monitor(self):
         if not self.monitor_lock.acquire(blocking=False):return
         try:
             items=[s for s in self.servers() if s.get('enabled',True)]
             def inspect(s):
-                health={'checked_at':now_iso(),'checked_epoch':time.time(),'api_ok':False,'error':'','protection_enabled':None}
-                try:
-                    start=time.monotonic();result=self.agh('status',settings=s)
-                    health.update(api_ok=True,version=result.get('version',''),protection_enabled=result.get('protection_enabled'),api_ms=round((time.monotonic()-start)*1000,1))
-                except Exception as e:health['error']=error_text(e)
+                with self.lock:previous=copy.deepcopy(self.health.get(s['id'],{}))
+                health={'checked_at':now_iso(),'checked_epoch':time.time(),'api_ok':False,'error':'','protection_enabled':None,'filtering_enabled':None,'last_success':previous.get('last_success')}
+                for attempt in range(2):
+                    try:
+                        start=time.monotonic();result=self.agh('status',settings=s)
+                        health.update(api_ok=True,version=result.get('version',''),protection_enabled=result.get('protection_enabled'),api_ms=round((time.monotonic()-start)*1000,1),error='',last_success=now_iso())
+                        break
+                    except Exception as e:
+                        health['error']=error_text(e)
+                        if isinstance(e,(urllib.error.HTTPError,ValueError)):break
+                if health['api_ok']:
+                    try:
+                        health['filtering_enabled']=self.agh('filtering/status',settings=s).get('enabled');health['controls_checked_at']=now_iso();health['controls_epoch']=time.time()
+                    except Exception as e:health['filtering_error']=error_text(e)
                 health['dns']=dns_probe(s.get('dns_host',''),s.get('dns_port',53))
+                if health['dns']['ok'] is False:health['dns']=dns_probe(s.get('dns_host',''),s.get('dns_port',53))
+                failed=not health['api_ok'] or health['dns']['ok'] is False
+                health['failures']=previous.get('failures',0)+1 if failed else 0
+                health['state']='down' if failed and health['failures']>=3 else 'checking' if failed else 'up'
                 return s['id'],health
             with ThreadPoolExecutor(max_workers=8) as pool:
                 results=list(pool.map(inspect,items))
             with self.lock:
-                ids={s['id'] for s in self.servers()};self.health.update({sid:h for sid,h in results if sid in ids});self.health_checked=now_iso()
+                ids={s['id'] for s in self.servers()}
+                for sid,h in results:
+                    if sid not in ids:continue
+                    current=self.health.get(sid,{})
+                    if current.get('controls_epoch',0)>h.get('controls_epoch',0):
+                        for key in ('protection_enabled','filtering_enabled','controls_checked_at','controls_epoch'):h[key]=current.get(key)
+                    self.health[sid]=h
+                self.health_checked=now_iso()
         finally:self.monitor_lock.release()
     def monitor_worker(self):
         # This loop is independent from source downloads and synchronization jobs.

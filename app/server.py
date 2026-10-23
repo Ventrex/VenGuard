@@ -21,6 +21,8 @@ from datetime import datetime, timezone
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from rules import domain, scope, parse_list, explain, compose, PACKS, rule_text
+from catalog import CATEGORIES, PRESETS, COMPATIBILITY
+from accounts import AccountMixin
 from hub import HubMixin, SECTIONS, FEATURES, HUB_DEFAULT, write_private, error_text
 
 ROOT=Path(__file__).parent
@@ -81,11 +83,14 @@ DEFAULT={
  'rules':[], 'adguard':{'url':'','username':'','password':''}
 }
 
-class Store(HubMixin):
+class Store(HubMixin,AccountMixin):
     def __init__(self,directory):
         self.dir=Path(directory); self.dir.mkdir(parents=True,exist_ok=True)
         self.lock=threading.RLock(); self.agh_lock=threading.Lock()
         self.config=read_json(self.dir/'config.json',DEFAULT)
+        self.config.setdefault('categories',{k:True for k in CATEGORIES})
+        self.config.setdefault('compatibility',{})
+        for source in self.config['sources']:source.setdefault('category','ads' if 'hagezi' in source.get('id','') else 'custom')
         self.observed=read_json(self.dir/'observed.json',{})
         self.caches=read_json(self.dir/'cache.json',{})
         self.feed_token=self.secret('feed-token')
@@ -95,7 +100,7 @@ class Store(HubMixin):
         self.report=read_json(self.dir/'report.json',{'count':0,'sources':[],'built':None,'added':0,'removed':0})
         self.origins={}; self.last_log=[]; self.last_poll=0; self.poll_error=''; self.last_refresh=0
         self.revision=0; self.last_synced_revision=-1
-        self.init_hub()
+        self.init_hub();self.init_accounts()
         self.save()
         if not (self.dir/'filter.txt').exists():
             lines,_,_=compose(self.config,self.caches,self.observed)
@@ -131,7 +136,10 @@ class Store(HubMixin):
         with urllib.request.build_opener(NoRedirect()).open(req,timeout=6) as response:
             raw=response.read(16*1024*1024+1)
             if len(raw)>16*1024*1024: raise ValueError('AdGuard-antwoord te groot.')
-            if not raw.strip(): return {}
+            if not raw.strip():
+                if body is not None or method in ('POST','PUT','DELETE'):return {}
+                raise ValueError('AdGuard gaf geen JSON terug; controleer de beheer-URL en poort.')
+            if (body is not None or method in ('POST','PUT','DELETE')) and raw.strip() in (b'OK',b'Ok',b'ok'): return {}
             try: return json.loads(raw)
             except json.JSONDecodeError: raise ValueError('AdGuard gaf geen JSON terug; controleer de beheer-URL en poort.')
     def feed_url(self):
@@ -181,7 +189,7 @@ class Store(HubMixin):
                 for file in sorted(backups.glob('*.txt'))[:-10]: file.unlink()
             if changed or not previous.exists(): atomic(previous,self.feed_text(lines))
             self.origins=origins
-            self.report={'count':len(lines),'sources':stats,'built':utc(),'added':len(set(lines)-old),'removed':len(old-set(lines)),'mode':config['mode'],'observed':len(self.observed)}
+            self.report={'count':len(lines),'sources':stats,'built':utc(),'added':len(set(lines)-old),'removed':len(old-set(lines)),'mode':config['mode'],'observed':len(self.observed),'duplicates':sum(x.get('duplicates',0) for x in stats)}
             atomic(self.dir/'cache.json',json.dumps(caches)); atomic(self.dir/'report.json',json.dumps(self.report,ensure_ascii=False))
             self.job.update(running=False,last_build=utc())
             sync=config.get('auto_sync',False) and bool(config['public_url']) and bool(config['adguard']['url']) and (changed or self.last_synced_revision!=rev or bool(self.job['sync_error']))
@@ -210,7 +218,7 @@ class Store(HubMixin):
             config['adguard']['password_set']=bool(config['adguard'].pop('password',''))
             for server in config.get('servers',[]):
                 server['password_set']=bool(server.pop('password',''))
-            return {'config':config,'packs':PACKS,'report':copy.deepcopy(self.report),'job':dict(self.job),'observed':len(self.observed),'poll_error':self.poll_error,'last_poll':self.last_poll or None,'feed_url':self.feed_url() if config['public_url'] else '', 'feed_path':'/lists/'+self.feed_token+'/filter.txt','version':'1.1.0','hub':self.hub_snapshot()}
+            return {'config':config,'packs':PACKS,'categories':CATEGORIES,'presets':PRESETS,'compatibility':COMPATIBILITY,'report':copy.deepcopy(self.report),'job':dict(self.job),'observed':len(self.observed),'poll_error':self.poll_error,'last_poll':self.last_poll or None,'feed_url':self.feed_url() if config['public_url'] else '', 'feed_path':'/lists/'+self.feed_token+'/filter.txt','version':'1.2.0','hub':self.hub_snapshot()}
 
 class Handler(BaseHTTPRequestHandler):
     server_version='VenGuard'
@@ -257,10 +265,13 @@ class Handler(BaseHTTPRequestHandler):
             expected='/lists/'+self.store.feed_token+'/filter.txt'
             if not hmac.compare_digest(path,expected): return self.respond({'error':'Niet gevonden.'},404)
             return self.respond((self.store.dir/'filter.txt').read_bytes(),ctype='text/plain')
-        if path=='/api/session': return self.respond({'authenticated':self.auth()})
+        if path=='/api/session': return self.respond({'authenticated':self.auth(),'account_configured':bool(self.store.account),'two_factor':bool((self.store.account or {}).get('totp_secret'))})
         if path.startswith('/api/'):
             if not self.auth(): return self.respond({'error':'Log eerst in.'},401)
             if path=='/api/state': return self.respond(self.store.snapshot())
+            if path=='/api/account': return self.respond(self.store.account_public())
+            if path=='/api/central-controls': return self.respond(self.store.read_controls())
+            if path=='/api/central-filters': return self.respond(self.store.agh('filtering/status',settings=self.store.primary()))
             if path=='/api/hub': return self.respond(self.store.hub_snapshot())
             if path=='/api/central': return self.respond(self.store.central_read(q.get('section','rules'),q.get('server','')))
             if path=='/api/log':
@@ -296,7 +307,7 @@ class Handler(BaseHTTPRequestHandler):
                 offset=max(0,min(int(q.get('offset',0)),1000000))
                 return self.respond({'lines':filtered[offset:offset+100],'total':len(filtered),'offset':offset})
             return self.respond({'error':'Niet gevonden.'},404)
-        files={'/':'index.html','/app.js':'app.js','/style.css':'style.css','/hub.js':'hub.js','/theme.js':'theme.js'}
+        files={'/':'index.html','/app.js':'app.js','/style.css':'style.css','/hub.js':'hub.js','/theme.js':'theme.js','/account.js':'account.js','/filters.js':'filters.js'}
         if path not in files: return self.respond({'error':'Niet gevonden.'},404)
         file=ROOT/'static'/files[path]
         return self.respond(file.read_bytes(),ctype={'html':'text/html','js':'text/javascript','css':'text/css'}[file.suffix[1:]])
@@ -323,12 +334,15 @@ class Handler(BaseHTTPRequestHandler):
                 history=[t for t in s.attempts.get(ip,[]) if now-t<300]
                 s.attempts={k:v for k,v in s.attempts.items() if v and now-v[-1]<300}
                 if len(history)>=10: return self.respond({'error':'Te veel pogingen. Wacht vijf minuten.'},429)
-                if not hmac.compare_digest(str(data.get('password','')),s.password):
-                    s.attempts[ip]=history+[now]; return self.respond({'error':'Onjuist wachtwoord.'},401)
+                if not s.login_owner(data):
+                    s.attempts[ip]=history+[now]; return self.respond({'error':'Onjuiste inloggegevens of 2FA-code. Een code is eenmalig bruikbaar.'},401)
                 token=secrets.token_urlsafe(32); s.sessions={k:v for k,v in s.sessions.items() if v>now}; s.sessions[token]=now+12*3600; s.attempts.pop(ip,None)
             secure='; Secure' if self.headers.get('X-Forwarded-Proto')=='https' else ''
             return self.respond({'ok':True},headers={'Set-Cookie':f'vg_session={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=43200'+secure})
         if not self.auth(): return self.respond({'error':'Log eerst in.'},401)
+        if path=='/api/account':
+            cookie=http.cookies.SimpleCookie(self.headers.get('Cookie',''));token=cookie['vg_session'].value
+            return self.respond(s.account_action(data,token))
         if path=='/api/logout':
             cookie=http.cookies.SimpleCookie(self.headers.get('Cookie',''))
             with s.lock:
@@ -396,11 +410,30 @@ class Handler(BaseHTTPRequestHandler):
         if path=='/api/central-protection':
             origin=s.primary();s.backup_central(origin,'Vóór bescherming wijzigen')
             s.agh('protection',{'enabled':bool(data.get('enabled')),'duration':0},settings=origin)
-            s.request_cluster();return self.respond({'ok':True})
+            controls=s.read_controls()
+            if controls['protection_enabled'] is not bool(data.get('enabled')):raise ValueError('AdGuard bevestigt de gevraagde bescherming nog niet; controleer de actuele status.')
+            s.request_cluster();return self.respond({'ok':True,'controls':controls,'hub':s.hub_snapshot()})
         if path=='/api/central-filtering':
-            interval=int(data.get('interval',24))
+            interval=int(data.get('interval',s.agh('filtering/status',settings=s.primary()).get('interval',24)))
             if interval not in (0,1,12,24,72,168):raise ValueError('Ongeldig filter-update-interval.')
             s.agh('filtering/config',{'enabled':bool(data.get('enabled')),'interval':interval},settings=s.primary())
+            controls=s.read_controls()
+            if controls['filtering_enabled'] is not bool(data.get('enabled')):raise ValueError('AdGuard bevestigt de gevraagde DNS-filtering nog niet; controleer de actuele status.')
+            s.request_cluster();return self.respond({'ok':True,'controls':controls,'hub':s.hub_snapshot()})
+        if path=='/api/central-filters':
+            origin=s.primary();status=s.agh('filtering/status',settings=origin);action=data.get('action')
+            if action=='refresh':
+                s.agh('filtering/refresh',{'whitelist':False},settings=origin)
+                s.agh('filtering/refresh',{'whitelist':True},settings=origin)
+            elif action in ('toggle','delete'):
+                whitelist=bool(data.get('whitelist'));items=status.get('whitelist_filters' if whitelist else 'filters',[])
+                item=next((f for f in items if f.get('url')==data.get('url')),None)
+                if not item:raise ValueError('Lijst gewijzigd of niet gevonden; laad opnieuw.')
+                if '/lists/'+s.feed_token+'/' in item['url']:raise ValueError('Beheer de VenGuard-lijst via Mijn filterlijst; wijzig hier alleen je overige AdGuard-lijsten.')
+                s.backup_central(origin,'Vóór filterlijst wijzigen')
+                if action=='delete':s.agh('filtering/remove_url',{'url':item['url'],'whitelist':whitelist},settings=origin)
+                else:s.agh('filtering/set_url',{'url':item['url'],'whitelist':whitelist,'data':{'name':item.get('name',''),'url':item['url'],'enabled':bool(data.get('enabled'))}},settings=origin)
+            else:raise ValueError('Ongeldige lijstactie.')
             s.request_cluster();return self.respond({'ok':True})
         if path=='/api/central-rewrite':
             origin=s.primary();action=data.get('action')
@@ -432,6 +465,8 @@ class Handler(BaseHTTPRequestHandler):
                     hours=int(data['auto_refresh_hours'])
                     if hours not in (6,12,24,48): raise ValueError('Kies 6, 12, 24 of 48 uur.')
                     new['auto_refresh_hours']=hours
+                if 'categories' in data:new['categories']={k:bool(data['categories'].get(k,True)) for k in CATEGORIES}
+                if 'compatibility' in data:new['compatibility']={p['id']:bool(data['compatibility'].get(p['id'],False)) for p in COMPATIBILITY}
                 if 'auto_sync' in data: new['auto_sync']=bool(data['auto_sync'])
                 if 'packs' in data:
                     new['packs']={p['id']:bool(data['packs'].get(p['id'],False)) for p in PACKS}
@@ -452,12 +487,15 @@ class Handler(BaseHTTPRequestHandler):
                     url=valid_url(data.get('url',''),public=True)
                     if url==s.config['public_url'] or '/lists/'+s.feed_token+'/' in url: raise ValueError('Je eigen VenGuard-lijst kan geen bron zijn.')
                     if any(x['url']==url for x in s.config['sources']): raise ValueError('Deze bron bestaat al.')
-                    s.config['sources'].append({'id':secrets.token_hex(6),'name':str(data.get('name') or 'Eigen bron')[:120],'url':url,'enabled':True})
+                    s.config['sources'].append({'id':secrets.token_hex(6),'name':str(data.get('name') or 'Eigen bron')[:120],'url':url,'enabled':True,'category':str(data.get('category','custom')) if data.get('category','custom') in CATEGORIES else 'custom'})
                 else:
                     item=next((x for x in s.config['sources'] if x['id']==data.get('id')),None)
                     if item is None: raise ValueError('Bron niet gevonden.')
                     if action=='delete': s.config['sources'].remove(item)
                     elif action=='toggle': item['enabled']=bool(data.get('enabled'))
+                    elif action=='category':
+                        if data.get('category') not in CATEGORIES:raise ValueError('Onbekende categorie.')
+                        item['category']=data['category']
                     else: raise ValueError('Ongeldige bronactie.')
                 s.changed(); s.request_build(fetch=True)
             return self.respond({'ok':True})

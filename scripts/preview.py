@@ -14,12 +14,18 @@ class DemoHandler(Handler):
     def auth(self): return True
 
 class DemoStore(Store):
+    protection=True;filtering=True
+    def monitor(self):
+        import time
+        for h in self.health.values():h.update(checked_at=utc(),checked_epoch=time.time(),controls_checked_at=utc(),controls_epoch=time.time(),protection_enabled=self.protection,filtering_enabled=self.filtering)
     def agh(self,path,body=None,query=None,settings=None,method=None):
-        if path=='status': return {'version':'DEMO — geen echte AdGuard','protection_enabled':True}
+        if path=='protection':self.protection=body['enabled'];return {}
+        if path=='filtering/config':self.filtering=body['enabled'];return {}
+        if path=='status': return {'version':'DEMO — geen echte AdGuard','protection_enabled':self.protection}
         if path=='dns_info':return {'upstream_dns':['https://dns.example.org/dns-query'],'bootstrap_dns':['1.1.1.1']}
         if path=='rewrite/list':return [{'domain':'nas.home.arpa','answer':'192.0.2.20','enabled':True}]
         if path=='querylog/config':return {'enabled':True,'interval':86400000,'anonymize_client_ip':False}
-        if path=='filtering/status': return {'enabled':True,'filters':[],'user_rules':[]}
+        if path=='filtering/status': return {'enabled':self.filtering,'filters':[],'user_rules':[]}
         if path=='clients': return {'clients':[]}
         if path=='querylog':
             return {'data':[{'time':utc(),'client':'192.0.2.83','client_info':{'name':'Demo iPhone'},'question':{'name':d,'type':'A'},'reason':r,'status':'NOERROR','rules':[]} for d,r in [('advertising-module.api.dpgmedia.cloud','NotFilteredNotFound'),('tracking-module.api.dpgmedia.cloud','FilteredBlackList'),('login.dpgmedia.net','NotFilteredNotFound'),('unknown.example.net','NotFilteredNotFound')]]}
@@ -37,7 +43,7 @@ if __name__=='__main__':
     store.config['auto_sync']=False
     store.config['sources'][0]['name']='DEMO — HaGeZi Light (testselectie)'
     store.caches={'hagezi-light':{'rules':['||ads.example.net^','||advertising-module.api.dpgmedia.cloud^'],'counts':{},'fetched':utc()}}
-    store.rebuild(False);store.poll()
+    store.monitor();store.rebuild(False);store.poll()
     server=ThreadingHTTPServer(('0.0.0.0',4173),DemoHandler);server.store=store
     print('DISPOSABLE UI DEMO at http://localhost:4173 — no production data',flush=True)
     server.serve_forever()

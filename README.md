@@ -17,11 +17,11 @@ bash start.sh
 Het script bouwt en start de container en toont:
 
 - het webadres: **`http://IP-VAN-JE-NUC:8098`**;
-- je automatisch aangemaakte beheerwachtwoord.
+- je automatisch aangemaakte installatiewachtwoord (totdat je een eigen account instelt).
 
 Krijg je **geen toegang tot Docker**? Voer in dezelfde map `sudo bash start.sh` uit. Het script installeert Docker niet. Als Docker nog ontbreekt, gebruik de [officiële Docker-installatiehandleiding](https://docs.docker.com/engine/install/) voor jouw Linux-versie, inclusief de Compose-plugin.
 
-## Upgraden vanaf VenGuard 1.0
+## Upgraden naar VenGuard 1.2
 
 In de bestaande VenGuard-map:
 
@@ -30,6 +30,40 @@ bash update.sh
 ```
 
 Je datavolume, beheerwachtwoord, filterbronnen en eigen regels blijven behouden. De oude enkele AdGuard-koppeling wordt automatisch je eerste bronserver. Het bijgewerkte Docker-image bevat **AdGuardHome Sync v0.9.4**; je hoeft geen extra container, poort of YAML-bestand voor Sync in te richten.
+
+## Nieuw in 1.2
+
+- **Bescherming aan/uit:** succesvolle AdGuard-acties met een lege reactie of tekst `OK` worden correct verwerkt. HTML-inlogpagina’s worden niet als succes geaccepteerd. Na wijzigen leest VenGuard de bescherming en DNS-filtering terug; beide toestanden staan bij Centraal beheer en per server.
+- **Rustigere status:** bij een mislukte netwerkcontrole volgt één herpoging. Een probleem wordt meteen zichtbaar als “Controle mislukt”; na drie opeenvolgende mislukte rondes krijgt het de gewone storingsstatus. Laatste API-bereikbaarheid en vorige sync-ronde staan apart. Dit herstelt geen onbereikbare host, onjuiste poort, firewall of Docker-netwerk.
+- **Algemene filters:** HaGeZi Light als rustige basis, optionele Threat Intelligence Mini, NSFW en Gambling Mini. De oude Nederlandse pakketten blijven aanvullende keuzes. Er wordt bij een upgrade geen nieuwe inhoudsblokkade of uitzondering aangezet.
+- **Categorieën:** advertenties/tracking, beveiliging, volwassen inhoud, gokken, sociale media en eigen lijsten. Iedere bron krijgt één beheercategorie; sommige bronnen bevatten meerdere soorten regels. Een categorie uitschakelen schakelt alleen de daarin ingedeelde VenGuard-bronnen uit, geen losstaande oude AdGuard-lijst of eigen regel. Je kunt de categorie per bron veranderen.
+- **Uitzonderingen:** optionele schakelaars staan `marktplaats.nl` of `ing.nl` inclusief subdomeinen toe. Dit dekt niet automatisch andere betaal-, afbeelding- of identiteitsproviders. Gebruik Netwerkactiviteit en Domein testen voor een gerichte extra uitzondering. Bestaande `$important`-regels of andere AdGuard-instellingen kunnen de uitkomst beïnvloeden.
+
+## Eigen account en authenticator-2FA
+
+1. Log na de update in met je bestaande installatiewachtwoord.
+2. Open **Account & 2FA**, kies een gebruikersnaam en een nieuw wachtwoord van minimaal 12 tekens. Vul ter bevestiging je installatiewachtwoord in.
+3. Log opnieuw in met je eigen account. Het installatiewachtwoord uit `.env` werkt nu niet meer op de website.
+4. Open **Account & 2FA → 2FA instellen** en bevestig met je huidige wachtwoord.
+5. Voeg in je authenticator een account **handmatig** toe met de getoonde geheime sleutel: TOTP, 6 cijfers, 30 seconden. Bevestig in VenGuard met de code uit je app. Controleer dat NUC en telefoon een juiste systeemtijd hebben.
+6. Bewaar de tien getoonde herstelcodes op een veilige plek. Ze worden één keer getoond. Iedere herstelcode werkt één keer in plaats van een authenticatorcode. Log daarna opnieuw in.
+
+Deze versie heeft één eigen beheerdersaccount, geen openbare registratie of meerdere gebruikersrollen. Wachtwoorden worden met scrypt gehasht; 2FA-sleutel en gehashte herstelcodes worden lokaal in `/data/account.json` met rechten `0600` bewaard. Accountwijzigingen beëindigen bestaande sessies. Een al gebruikte TOTP-code wordt niet opnieuw geaccepteerd; wacht bij snel opnieuw inloggen op de volgende code. De authenticator is geen externe dienst van VenGuard.
+
+**Passkeys zijn niet ingebouwd in deze versie.** De gevraagde alternatieve optie is hier authenticator-2FA. WebAuthn vraagt voor gebruik vanaf andere apparaten een beveiligd HTTPS-adres. Gebruik ook voor wachtwoorden en 2FA bij voorkeur HTTPS via je eigen vertrouwde reverse proxy; stel de beheerpoort niet rechtstreeks open op internet. Cookies worden `Secure` als de proxy `X-Forwarded-Proto: https` doorgeeft.
+
+### Account of 2FA kwijt
+
+Gebruik eerst een herstelcode. Zonder werkende accounttoegang kun je met lokale Docker-beheertoegang uitsluitend het VenGuard-account wissen:
+
+```bash
+docker compose exec venguard python3 reset_account.py
+# Typ HERSTEL als je het eigen account en 2FA wilt wissen.
+docker compose restart venguard
+sed -n 's/^VENGUARD_PASSWORD=//p' .env
+```
+
+Log daarna in met dit installatiewachtwoord en stel je eigen account opnieuw in. Filters, serverkoppelingen en AdGuard-inloggegevens blijven behouden. Dit herstel kan alleen met toegang tot de Docker-host; er is geen onbeveiligde resetknop in de website. Een back-up van het datavolume bevat ook je 2FA-sleutel: bescherm die back-up.
 
 ### Je twee AdGuard-servers instellen
 
@@ -55,7 +89,8 @@ VenGuard is geen DNS-proxy en zit niet tussen je apparaten en AdGuard. Valt VenG
 | Centraal beheer | Eigen AdGuard-regels, DNS/upstreams, herschrijvingen, apparaten, geblokkeerde diensten en instellingen van logs/statistieken beheren op de bronserver. Geavanceerde onderdelen hebben een JSON-editor. |
 | Netwerkactiviteit | Eén gecombineerd overzicht van al je servers; filter op server, domein, apparaat en uitkomst. Offline servers verbergen de overige activiteit niet. |
 | Eigen regels | Domeinen blokkeren of toestaan, voor iedereen of alleen een apparaat-IP/CIDR. Regels aan- en uitzetten of verwijderen. |
-| Bronnen & pakketten | Bronlijsten importeren uit AdGuard, eigen publieke HTTPS-bronnen toevoegen, Nederlandse pakketten kiezen en downloads bijwerken. |
+| Filters & categorieën | Algemene broncatalogus, categorieën, eigen HTTPS-lijsten, samenvoegen zonder dubbele regels, gerichte uitzonderingen en bestaande AdGuard-lijsten aan/uitzetten, verwijderen en verversen. |
+| Account & 2FA | Eigen beheerdersaccount met gebruikersnaam, wachtwoord, authenticator en eenmalige herstelcodes. |
 | Mijn filterlijst | De samengevoegde lijst doorzoeken en downloaden; de actuele AdGuard-uitkomst per domein en apparaat testen. |
 | Diagnose | Controleren of bescherming en lijstfiltering aanstaan en of clients eigen filtering hebben uitgeschakeld. |
 
@@ -75,10 +110,10 @@ Als rustige internationale basis is **HaGeZi Light** ingesteld. Ook Nederlandse 
 ## Je bestaande lijsten samenvoegen
 
 1. Voeg je AdGuard-servers toe bij Servers & Sync en kies een bronserver.
-2. Open **Bronnen & pakketten → Importeer uit AdGuard**.
+2. Open **Filters & categorieën → Importeer uit AdGuard**.
 3. VenGuard kopieert van de bronserver de URLs van **ingeschakelde DNS-blokkeerlijsten**. Uitgeschakelde lijsten en toestaanlijsten worden niet in deze bronimport meegenomen. Bestaande eigen AdGuard-regels beheer je apart bij Centraal beheer.
 4. Bekijk per bron het aantal bruikbare DNS-regels, overgeslagen regels en eventuele downloadfouten.
-5. Test jouw VenGuard-lijst in AdGuard. Schakel daarna desgewenst de oude, overlappende blokkeerlijsten **zelf** uit in AdGuard. Laat de VenGuard-lijst aan.
+5. Test jouw VenGuard-lijst in AdGuard. Open daarna **Filters & categorieën → Bestaande lijsten in AdGuard** en schakel oude overlap uit met de aan/uit-schakelaars. Laat de VenGuard-lijst aan. Met filter-sync ingeschakeld volgen de replica’s.
 
 Zolang andere AdGuard-lijsten actief blijven op de bronserver, kunnen ze domeinen blijven blokkeren die jij niet in de VenGuard-lijst hebt geselecteerd. AdGuard Sync kan ook die bestaande lijsten naar de replica’s kopiëren; kies daarom bewust welke lijsten je op de bronserver actief laat. Bestaande AdGuard-uitzonderingen kunnen eveneens voorrang hebben. **Domein testen** toont de actuele AdGuard-uitkomst.
 
@@ -105,7 +140,7 @@ Limieten: maximaal 30 bronnen, 24 MiB per download en 1 miljoen opgeslagen bronr
 
 ## Alleen blokkeren wat je netwerk gebruikt
 
-Bij **Bronnen & pakketten → Hoe groot wil je jouw lijst?** kies je:
+Onderaan **Filters & categorieën** kies je de lijstmodus:
 
 - **Volledige gekozen bronnen (standaard):** alle ondersteunde bronregels meenemen. Nieuwe domeinen worden meteen door de gekozen bronlijsten gedekt.
 - **Alleen geziene domeinen:** alleen bronblokkades meenemen die overeenkomen met eerder waargenomen domeinen. Ook een ouderdomeinregel wordt meegenomen als een subdomein is gezien. Bronuitzonderingen, eigen regels en gekozen pakketten blijven actief.
@@ -169,7 +204,7 @@ docker compose start
 # Log bekijken.
 docker compose logs --tail=50
 
-# Beheerwachtwoord opnieuw bekijken.
+# Installatiewachtwoord bekijken (werkt alleen als er geen eigen account is).
 sed -n 's/^VENGUARD_PASSWORD=//p' .env
 ```
 
@@ -209,6 +244,9 @@ Tests uitvoeren zonder Docker:
 ```bash
 python3 -m unittest discover -s tests -v
 node --check app/static/app.js
+node --check app/static/hub.js
+node --check app/static/account.js
+node --check app/static/filters.js
 bash -n start.sh update.sh
 ```
 
@@ -219,6 +257,7 @@ GitHub Actions voert tests uit, bouwt het Docker-image, controleert dat de produ
 - [AdGuard Home API-schema](https://github.com/AdguardTeam/AdGuardHome/blob/master/openapi/openapi.yaml)
 - [AdGuard DNS-filterregels](https://adguard-dns.io/kb/general/dns-filtering-syntax/)
 - [Beperkingen van DNS-filtering](https://github.com/AdguardTeam/AdGuardHome/wiki/FAQ#are-there-any-known-limitations)
+- [TOTP-standaard (RFC 6238)](https://www.rfc-editor.org/rfc/rfc6238.html)
 - [HaGeZi DNS-blocklists](https://github.com/hagezi/dns-blocklists)
 - [Apple: Private Relay op netwerken](https://developer.apple.com/support/prepare-your-network-for-icloud-private-relay/)
 

@@ -2,6 +2,7 @@
 import ipaddress
 import re
 from collections import Counter
+from catalog import COMPATIBILITY
 
 # Descriptions are local annotations, not live reputation or malware verdicts.
 CATALOGUE = [
@@ -122,23 +123,28 @@ def compose(config,caches,observed):
         used.update(suffixes(d))
     for source in config['sources']:
         cached=caches.get(source['id'],{})
-        chosen=[]
-        if source['enabled']:
+        chosen=[];duplicates=0
+        if source['enabled'] and config.get('categories',{}).get(source.get('category','custom'),True):
             for r in cached.get('rules',[]):
                 d=r[4:-1] if r.startswith('@@') else r[2:-1]
                 # Keep exceptions even in observed mode to preserve upstream intent.
                 if config['mode']=='all' or r.startswith('@@') or d in used:
                     chosen.append(r)
 
+            duplicates=len(set(chosen)&merged)
             merged.update(chosen)
-        stats.append({**source,'rules':len(cached.get('rules',[])),'selected':len(chosen),'skipped':cached.get('counts',{}).get('skipped',0),'examples':cached.get('examples',[]),'fetched':cached.get('fetched'),'error':cached.get('error',''),'cached_fallback':bool(cached.get('error') and cached.get('rules'))})
+        stats.append({**source,'rules':len(cached.get('rules',[])),'selected':len(chosen),'duplicates':duplicates,'skipped':cached.get('counts',{}).get('skipped',0),'examples':cached.get('examples',[]),'fetched':cached.get('fetched'),'error':cached.get('error',''),'cached_fallback':bool(cached.get('error') and cached.get('rules'))})
     for host,_,_,pack,_ in CATALOGUE:
         if pack and config['packs'].get(pack,False):
             merged.add('||'+host+'^'); origins.setdefault(host,[]).append('Nederlands keuzepakket')
     for item in config['rules']:
         if item.get('enabled',True):
             merged.add(rule_text(item)); origins.setdefault(item['domain'],[]).append('Eigen '+item['action'])
-    # Global explicit allows win over block rules, including other lists' $important
-    # entries (advanced source modifiers are never imported).
+    for preset in COMPATIBILITY:
+        if config.get('compatibility',{}).get(preset['id'],False):
+            for host in preset['domains']:
+                merged.add('@@||'+host+'^');origins.setdefault(host,[]).append('Bereikbaarheid: '+preset['name'])
+    # Ordinary allow rules are emitted unchanged. Advanced AdGuard rules outside
+    # this generated list may affect their priority; use check_host to verify.
     lines=sorted(merged)
     return lines,stats,origins

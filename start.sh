@@ -37,7 +37,7 @@ host_ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
 host_ip="${host_ip:-IP-VAN-JE-NUC}"
 echo
 echo "Open VenGuard: http://${host_ip}:${port}"
-printf 'Beheerwachtwoord: '
+printf 'Installatiewachtwoord (alleen zonder eigen account): '
 sed -n 's/^VENGUARD_PASSWORD=//p' .env
 echo 'Vul daarna bij Instellingen het AdGuard-beheeradres en het VenGuard LAN-adres in.'
 if [[ "${state:-}" != healthy ]]; then
