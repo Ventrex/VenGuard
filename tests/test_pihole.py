@@ -98,6 +98,11 @@ class PiHoleTests(unittest.TestCase):
         def call(server,path,*args,**kwargs):return {'ok':True,'server_time':1020} if path=='action/gravity' else {'lists':[item]}
         with patch.object(self.store.pihole,'call',side_effect=call),patch('providers.time.monotonic',side_effect=[100,120]):
             self.assertEqual(self.store.pihole.refresh(self.pi)['verified'],1)
+    def test_unchanged_list_retains_content_timestamp_without_false_failure(self):
+        item={'address':'https://example.org/list','type':'block','enabled':True,'status':2,'date_updated':500,'number':1,'abp_entries':1}
+        def call(server,path,*args,**kwargs):return {'ok':True,'server_time':1020} if path=='action/gravity' else {'lists':[item]}
+        with patch.object(self.store.pihole,'call',side_effect=call):self.assertEqual(self.store.pihole.refresh(self.pi)['verified'],1)
+        self.assertEqual(self.store.pihole.list_item(item)['rules_count'],1)
     def test_exact_live_rule_does_not_replace_foreign_rules_or_require_gravity(self):
         foreign={'domain':'keep.example.net','type':'allow','kind':'exact','comment':'Existing user rule','enabled':True,'groups':[2]};self.ftl.domains=[copy.deepcopy(foreign)]
         self.store.config['rules']=[{'domain':'checkout.example.net','action':'allow','match':'exact','enabled':True}]

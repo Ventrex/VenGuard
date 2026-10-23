@@ -234,7 +234,7 @@ class Store(HubMixin,AccountMixin,OperationsMixin,SecurityMixin,ConnectivityMixi
             config['adguard']['password_set']=bool(config['adguard'].pop('password',''))
             for server in config.get('servers',[]):
                 server['password_set']=bool(server.pop('password',''))
-            return {'config':config,'packs':PACKS,'categories':CATEGORIES,'presets':PRESETS,'report':copy.deepcopy(self.report),'job':dict(self.job),'observed':len(self.observed),'poll_error':self.poll_error,'last_poll':self.last_poll or None,'feed_url':self.feed_url() if config['public_url'] else '', 'feed_path':'/lists/'+self.feed_token+'/filter.txt','version':'2.0.0','hub':self.hub_snapshot(),'management':self.management_snapshot(),'network':self.network_snapshot()}
+            return {'config':config,'packs':PACKS,'categories':CATEGORIES,'presets':PRESETS,'report':copy.deepcopy(self.report),'job':dict(self.job),'observed':len(self.observed),'poll_error':self.poll_error,'last_poll':self.last_poll or None,'feed_url':self.feed_url() if config['public_url'] else '', 'feed_path':'/lists/'+self.feed_token+'/filter.txt','version':'2.0.1','hub':self.hub_snapshot(),'management':self.management_snapshot(),'network':self.network_snapshot()}
 
 class Handler(BaseHTTPRequestHandler):
     server_version='VenGuard'

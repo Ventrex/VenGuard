@@ -71,7 +71,7 @@ class PiHole:
           'filters':[self.list_item(x) for x in data if x.get('type','block')=='block'],
           'whitelist_filters':[self.list_item(x) for x in data if x.get('type')=='allow'],'user_rules':[]}
     @staticmethod
-    def list_item(x):return {**x,'url':x['address'],'name':x.get('comment') or x['address'],'rules_count':(x.get('number') or 0)+(x.get('abp_entries') or 0),'last_updated':x.get('date_updated')}
+    def list_item(x):return {**x,'url':x['address'],'name':x.get('comment') or x['address'],'rules_count':x.get('number') or 0,'last_updated':x.get('date_updated')}
     def refresh(self,server,verify_urls=None):
         before=self.call(server,'lists').get('lists',[])
         if verify_urls is not None and set(verify_urls)-{r['address'] for r in before if r.get('enabled')}:raise ValueError('Pi-hole bevestigt niet alle VenGuard-abonnementen; probeer de koppeling opnieuw.')
@@ -83,7 +83,11 @@ class PiHole:
         after={(r['address'],r.get('type','block')):r for r in self.call(server,'lists').get('lists',[])}
         for key in expected:
             item=after.get(key,{})
-            if not item.get('enabled') or item.get('status') not in (1,2) or item.get('date_updated',0)<requested_at-2:
+            status=item.get('status');updated=item.get('date_updated') or 0
+            # Status 2 means checked upstream and unchanged. Pi-hole deliberately
+            # retains the last content-change timestamp, including on HTTP 304.
+            verified=(status==1 and updated>=requested_at-2) or (status==2 and updated>0)
+            if not item.get('enabled') or not verified:
                 raise ValueError('Pi-hole bevestigt nog geen actuele succesvolle download voor alle gekozen lijsten. Mogelijk loopt Gravity nog of is een bron niet bereikbaar; de volgende ronde probeert opnieuw.')
         return {'ok':True,'verified':len(expected)}
     def adapter(self,server,path,body=None,query=None,method=None):
