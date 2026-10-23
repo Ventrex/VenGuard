@@ -3,7 +3,7 @@ FROM python:3.12-slim-bookworm
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 VENGUARD_DATA=/data VENGUARD_PORT=8098
 COPY --from=adguard-sync /opt/go/adguardhome-sync /usr/local/bin/adguardhome-sync
 WORKDIR /app
-RUN groupadd --gid 10001 venguard && useradd --uid 10001 --gid venguard --no-create-home venguard && mkdir /data && chown venguard:venguard /data
+RUN groupadd --gid 10001 venguard && useradd --uid 10001 --gid venguard --no-create-home venguard && mkdir /data /network && chown venguard:venguard /data /network
 COPY --chown=venguard:venguard app/ /app/
 COPY licenses/ /usr/share/licenses/venguard/
 COPY THIRD-PARTY-NOTICES.md /usr/share/licenses/venguard/

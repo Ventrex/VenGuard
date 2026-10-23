@@ -9,8 +9,10 @@ services:
     environment:
       VENGUARD_PASSWORD: ${VENGUARD_PASSWORD:?Start eerst met bash start.sh of maak zelf een .env}
       TZ: Europe/Amsterdam
+      VENGUARD_NETWORK_DIR: /network
     volumes:
       - venguard-data:/data
+      - venguard-network:/network
     read_only: true
     tmpfs:
       - /tmp:size=32m,noexec,nosuid
@@ -25,5 +27,34 @@ services:
       options:
         max-size: 5m
         max-file: "2"
+  scanner:
+    build:
+      context: .
+      dockerfile: Dockerfile.scanner
+    container_name: venguard-scanner
+    restart: unless-stopped
+    init: true
+    network_mode: host
+    environment:
+      VENGUARD_AGENT_URL: http://127.0.0.1:${VENGUARD_PORT:-8098}
+    volumes:
+      - venguard-network:/network:ro
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,noexec,nosuid
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_RAW
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 192m
+    cpus: 0.5
+    logging:
+      driver: json-file
+      options:
+        max-size: 1m
+        max-file: "1"
 volumes:
+  venguard-network:
   venguard-data:

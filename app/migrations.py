@@ -17,6 +17,9 @@ LEGACY_RULES=[('advertising-module.api.dpgmedia.cloud', 'dpg_ads'),
 
 def migrate(config):
     done=config.setdefault("migrations",[])
+    if 'stable-lists-v2' not in done:
+        if config.get('mode')=='observed':config['mode']='all';config['mode_migration']='Compacte modus vervangen door volledige bronnen. Gezien verkeer verkleint de lijst niet meer automatisch.'
+        done.append('stable-lists-v2')
     if "general-filtering-v13" in done:return
     existing={r["domain"] for r in config["rules"]}
     for host,pack in LEGACY_RULES:

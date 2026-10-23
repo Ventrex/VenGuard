@@ -15,6 +15,9 @@ class DemoHandler(Handler):
 
 class DemoStore(Store):
     protection=True;filtering=True
+    def snapshot(self):
+        self.monitor();self.check_connectivity()
+        return super().snapshot()
     def monitor(self,include_dns=True):
         import time
         for h in self.health.values():h.update(checked_at=utc(),checked_epoch=time.time(),controls_checked_at=utc(),controls_epoch=time.time(),protection_enabled=self.protection,filtering_enabled=self.filtering)
@@ -34,7 +37,7 @@ class DemoStore(Store):
         if path=='filtering/set_rules':self.demo_rules=body['rules'];return {}
         if path=='clients': return {'clients':[]}
         if path=='querylog':
-            return {'data':[{'time':utc(),'client':'192.0.2.83','client_info':{'name':'Demo iPhone'},'question':{'name':d,'type':'A'},'reason':r,'status':'NOERROR','rules':[]} for d,r in [('ads.example.net','FilteredBlackList'),('checkout.example.net','FilteredBlackList'),('content.example.net','NotFilteredNotFound'),('unknown.example.net','NotFilteredNotFound')]]}
+            return {'data':[{'time':utc(),'client':'192.0.2.83','client_info':{'name':'Demo iPhone'},'question':{'name':d,'type':'A'},'reason':r,'status':'NOERROR','rules':[]} for d,r in [('example.org','NotFilteredNotFound'),('ads.example.net','FilteredBlackList'),('checkout.example.net','FilteredBlackList'),('content.example.net','NotFilteredNotFound'),('unknown.example.net','NotFilteredNotFound')]]}
         if path=='filtering/check_host': return {'reason':'NotFilteredNotFound','rules':[]}
         return {}
 
@@ -47,6 +50,9 @@ if __name__=='__main__':
     store.health={'one':{'checked_at':utc(),'checked_epoch':time.time(),'api_ok':True,'protection_enabled':True,'version':'DEMO','dns':{'ok':True,'ms':2.4,'error':''}},'two':{'checked_at':utc(),'checked_epoch':time.time(),'api_ok':False,'protection_enabled':None,'dns':{'ok':False,'ms':None,'error':'Demonstratie van een uitgevallen server.'}}}
     store.config['public_url']='http://demo-venguard.invalid:8098'
     store.config['auto_sync']=False
+    store.desired.update(captured=True,revision=3,sections={'dns':{'upstream_dns':['1.1.1.1'],'bootstrap_dns':['9.9.9.9']}})
+    store.management_results={'one':{'ok':True,'revision':3,'at':utc(),'message':'DEMO: profiel bevestigd.'},'two':{'ok':False,'revision':3,'at':utc(),'message':'DEMO: server niet bereikbaar.'}}
+    store.network.update(enabled=True,subnets=['192.168.0.0/24'],agent_seen=time.time(),last_scan=utc(),last_scan_epoch=time.time(),devices={'demo-phone':{'id':'demo-phone','name':'Telefoon — demo','type':'Telefoon','notes':'','ip':'192.168.0.83','mac':'aa:bb:cc:dd:ee:ff','hostname':'','vendor':'Voorbeeldfabrikant','state':'online','last_seen':utc()},'demo-sensor':{'id':'demo-sensor','name':'Sensor — demo','type':'Sensor','notes':'Slaapstand — demonstratie','ip':'192.168.0.84','mac':'aa:bb:cc:dd:ee:fe','hostname':'','vendor':'','state':'offline','last_seen':utc()}})
     store.config['sources'][0]['name']='DEMO — HaGeZi Light (testselectie)'
     store.caches={'hagezi-light':{'rules':['||ads.example.net^','||metrics.example.net^'],'counts':{},'fetched':utc()}}
     store.monitor();store.check_connectivity();store.rebuild(False);store.poll()

@@ -26,6 +26,7 @@ jobs:
           node --check app/static/filters.js
           node --check app/static/security.js
           node --check app/static/simple.js
+          node --check app/static/workspace.js
           bash -n start.sh update.sh
       - name: Bouw productie-image
         run: docker build -t venguard:test .
@@ -73,8 +74,35 @@ jobs:
           VENGUARD_PIHOLE_URL: http://127.0.0.1:18080
           VENGUARD_PIHOLE_PASSWORD: ci-only-pihole-password
         run: python3 -m unittest discover -s tests -p test_native_pihole.py -v
+      - name: Start twee schone officiële AdGuard Home-servers
+        run: |
+          docker run -d --name venguard-agh-one -p 127.0.0.1:19081:3000 adguard/adguardhome:v0.107.79
+          docker run -d --name venguard-agh-two -p 127.0.0.1:19082:3000 adguard/adguardhome:v0.107.79
+          for attempt in $(seq 1 30); do
+            if curl --silent --fail http://127.0.0.1:19081/control/install/get_addresses >/dev/null && curl --silent --fail http://127.0.0.1:19082/control/install/get_addresses >/dev/null; then exit 0; fi
+            sleep 1
+          done
+          exit 1
+      - name: Test VenGuard-profiel op schone AdGuard met onbereikbare bron
+        env:
+          VENGUARD_AGH_DISPOSABLE: '1'
+        run: python3 -m unittest discover -s tests -p test_native_adguard.py -v
+      - name: Controleer scanneragent en lokale Nmap-uitvoering
+        run: |
+          docker exec venguard-scanner nmap -sn -n -oX - 127.0.0.1
+          docker exec -i venguard python3 - <<'PY'
+          import json, time, urllib.request
+          from pathlib import Path
+          token=json.loads(Path('/network/agent-token').read_text())['token']
+          assert token
+          for attempt in range(30):
+              info=json.loads(Path('/data/network.json').read_text()) if Path('/data/network.json').exists() else {}
+              if time.time()-info.get('agent_seen',0)<180:break
+              time.sleep(1)
+          else:raise SystemExit('Scanneragent meldt zich niet bij VenGuard')
+          PY
       - name: Opruimen
         if: always()
         run: |
           docker compose down || true
-          docker rm -f venguard-pihole-test || true
+          docker rm -f venguard-pihole-test venguard-agh-one venguard-agh-two || true

@@ -1,0 +1,6 @@
+FROM python:3.12-slim-bookworm
+RUN apt-get update && apt-get install -y --no-install-recommends nmap iputils-ping && rm -rf /var/lib/apt/lists/*
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 VENGUARD_NETWORK_DIR=/network
+WORKDIR /app
+COPY app/scanner_agent.py /app/scanner_agent.py
+CMD ["python3", "scanner_agent.py"]

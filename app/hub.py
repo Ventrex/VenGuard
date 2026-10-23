@@ -1,7 +1,6 @@
-"""Multiple independent AdGuard servers and the real AdGuardHome Sync engine.
+"""Independent DNS servers, shared API editors and the legacy Go sync engine.
 
-DNS traffic never goes through VenGuard. A fixed origin is authoritative;
-replicas are never promoted automatically while it is unavailable.
+ManagementMixin owns the desired profile; DNS traffic remains on the DNS servers.
 """
 import base64
 import copy
@@ -46,6 +45,9 @@ SECTIONS={
  'services':{'name':'Geblokkeerde diensten','get':'blocked_services/get','set':'blocked_services/update','method':'PUT'},
  'querylog':{'name':'Verzoekenlog','get':'querylog/config','set':'querylog/config/update','method':'PUT'},
  'statistics':{'name':'Statistieken','get':'stats/config','set':'stats/config/update','method':'PUT'},
+ 'safebrowsing':{'name':'Safe Browsing','get':'safebrowsing/status','toggle':'safebrowsing'},
+ 'parental':{'name':'Ouderlijk toezicht','get':'parental/status','keys':['enabled'],'toggle':'parental'},
+ 'safesearch':{'name':'Safe Search','get':'safesearch/status','set':'safesearch/settings','method':'PUT'},
  'access':{'name':'DNS-toegangsregels','get':'access/list','set':'access/set'},
 }
 
@@ -188,6 +190,7 @@ class HubMixin:
                     try:
                         filtering=self.agh('filtering/status',settings=s)
                         health['filtering_enabled']=filtering.get('enabled');health['controls_checked_at']=now_iso();health['controls_epoch']=time.time()
+                        health['server_filter_rules']=sum(f.get('rules_count',0) or 0 for f in filtering.get('filters',[]) if f.get('enabled'))
                         health['active_filters']=sum(bool(f.get('enabled')) for f in filtering.get('filters',[]))
                         health['native_rules']=len(filtering.get('user_rules',[]))
                         health['venguard_feed']=any(f.get('enabled') and f.get('url')==self.feed_url() for f in filtering.get('filters',[])) if self.config.get('public_url') else None
@@ -271,13 +274,16 @@ class HubMixin:
             from rules import domain
             for sid,rows,error in results:
                 for row in rows or []:
-                    try:self.observed[domain(row.get('question',{}).get('name',''))]=now
+                    try:
+                        host=domain(row.get('question',{}).get('name',''))
+                        if host!='example.org':self.observed[host]=now
                     except ValueError:pass
             self.observed={d:t for d,t in sorted(self.observed.items(),key=lambda x:x[1],reverse=True)[:50000] if now-t<30*86400}
             write_private(self.dir/'observed.json',self.observed)
             if self.config['mode']=='observed':self.request_build()
         return self.last_log
     def request_cluster(self,allow_dns=False):
+        if hasattr(self,'management_event'):self.management_event.set()
         if allow_dns:self.allow_dns_sync=True
         self.cluster_event.set()
         with self.lock:
@@ -360,6 +366,8 @@ class HubMixin:
         return {'ok':self.sync_status['state']=='success','message':'Synchronisatieronde afgerond.','status':copy.deepcopy(self.sync_status)}
     def cluster_worker(self):
         while not self.stop.is_set():
+            if hasattr(self,'desired'):
+                self.stop.wait(1);continue
             self.cluster_event.wait(1)
             with self.lock:enabled=self.config['cluster_sync']['enabled'];minutes=self.config['cluster_sync']['interval_minutes']
             if self.cluster_event.is_set() or (enabled and time.time()-self.last_cluster_attempt>minutes*60):
@@ -370,6 +378,7 @@ class HubMixin:
                         with self.lock:self.job['sync_error']=error_text(e)
                 if enabled:self.run_cluster(allow_dns=allow_dns)
     def central_read(self,section,sid=''):
+        if not sid and getattr(self,'desired',{}).get('captured'):return self.desired_read(section)
         spec=SECTIONS.get(section)
         if not spec:raise ValueError('Onbekend instellingenonderdeel.')
         server=self.selected(sid)
@@ -379,6 +388,7 @@ class HubMixin:
         if spec.get('keys'):value={k:v for k,v in value.items() if k in spec['keys']}
         return {'section':section,'name':spec['name'],'value':value,'etag':digest(value),'server_id':server['id']}
     def central_write(self,section,value,etag):
+        if getattr(self,'desired',{}).get('captured'):return self.desired_write(section,value,etag)
         server=self.primary();before=self.central_read(section)
         if not etag or before['etag']!=etag:raise ValueError('Instellingen zijn intussen gewijzigd. Laad opnieuw voordat je opslaat.')
         spec=SECTIONS[section]

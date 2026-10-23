@@ -82,8 +82,10 @@ DEFAULT={
 }
 
 from connectivity import ConnectivityMixin
+from management import ManagementMixin
+from network import NetworkMixin
 
-class Store(HubMixin,AccountMixin,OperationsMixin,SecurityMixin,ConnectivityMixin):
+class Store(HubMixin,AccountMixin,OperationsMixin,SecurityMixin,ConnectivityMixin,ManagementMixin,NetworkMixin):
     def __init__(self,directory):
         self.dir=Path(directory); self.dir.mkdir(parents=True,exist_ok=True)
         self.lock=threading.RLock(); self.agh_lock=threading.Lock()
@@ -102,7 +104,7 @@ class Store(HubMixin,AccountMixin,OperationsMixin,SecurityMixin,ConnectivityMixi
         self.report=read_json(self.dir/'report.json',{'count':0,'sources':[],'built':None,'added':0,'removed':0})
         self.origins={}; self.last_log=[]; self.last_poll=0; self.poll_error=''; self.last_refresh=0
         self.revision=0; self.last_synced_revision=-1
-        self.init_hub();self.init_accounts();self.init_operations();self.init_security();self.init_connectivity()
+        self.init_hub();self.init_accounts();self.init_operations();self.init_security();self.init_connectivity();self.init_management();self.init_network()
         self.save()
         if not (self.dir/'filter.txt').exists():
             lines,_,_=compose(self.config,self.caches,self.observed)
@@ -116,6 +118,7 @@ class Store(HubMixin,AccountMixin,OperationsMixin,SecurityMixin,ConnectivityMixi
         atomic(self.dir/'config.json',json.dumps(self.config,ensure_ascii=False,indent=2))
     def changed(self):
         self.revision+=1; self.save(); self.request_build()
+        if hasattr(self,'network'):self.write_scanner_config()
     def request_build(self,fetch=False):
         with self.lock:
             self.fetch_requested |= fetch; self.event.set()
@@ -168,6 +171,8 @@ class Store(HubMixin,AccountMixin,OperationsMixin,SecurityMixin,ConnectivityMixi
                     if not rules: raise ValueError('Geen ondersteunde DNS-regels gevonden. Bestaande cache blijft behouden.')
                     if len(rules)+sum(len(v.get('rules',[])) for k,v in caches.items() if k!=sid)>1000000:
                         raise ValueError('Samen meer dan 1 miljoen bronregels. Verwijder een overlappende bron; vorige cache blijft behouden.')
+                    previous=caches.get(sid,{})
+                    if len(previous.get('rules',[]))>=1000 and len(rules)<len(previous['rules'])*.2:raise ValueError('Bron is meer dan 80% gekrompen. De laatste goede bron blijft actief; controleer de bron-URL.')
                     caches[sid]={'rules':rules,'counts':counts,'examples':examples,'fetched':utc(),'error':''}
                 except Exception as e:
                     caches[sid]={**caches.get(sid,{}),'error':safe_network_error(e)}
@@ -182,6 +187,7 @@ class Store(HubMixin,AccountMixin,OperationsMixin,SecurityMixin,ConnectivityMixi
             self.caches=caches
             lines,stats,origins=compose(config,caches,self.observed)
             old=set(l for l in (self.dir/'filter.txt').read_text().splitlines() if l and not l.startswith('!'))
+            if len(old)>=1000 and any(source['enabled'] and config.get('categories',{}).get(source.get('category','custom'),True) and not caches.get(source['id'],{}).get('rules') for source in config['sources']):raise ValueError('Een actieve bron ontbreekt. De vorige gepubliceerde lijst blijft behouden.')
             changed=set(lines)!=old
             previous=self.dir/'filter.txt'
             backups=self.dir/'backups'; backups.mkdir(exist_ok=True)
@@ -206,9 +212,9 @@ class Store(HubMixin,AccountMixin,OperationsMixin,SecurityMixin,ConnectivityMixi
             if signaled:
                 with self.lock: self.event.clear(); fetch=self.fetch_requested; self.fetch_requested=False
                 try: self.rebuild(fetch)
-                except Exception:
+                except Exception as error:
                     logging.exception('List build failed')
-                    with self.lock: self.job.update(running=False,error='Lijst opbouwen mislukt. De laatst gepubliceerde lijst blijft beschikbaar.')
+                    with self.lock: self.job.update(running=False,error=error_text(error) if isinstance(error,ValueError) else 'Lijst opbouwen mislukt. De laatst gepubliceerde lijst blijft beschikbaar.')
                 if fetch: self.last_refresh=now
             with self.lock:
                 hours=self.config['auto_refresh_hours']
@@ -220,7 +226,7 @@ class Store(HubMixin,AccountMixin,OperationsMixin,SecurityMixin,ConnectivityMixi
             config['adguard']['password_set']=bool(config['adguard'].pop('password',''))
             for server in config.get('servers',[]):
                 server['password_set']=bool(server.pop('password',''))
-            return {'config':config,'packs':PACKS,'categories':CATEGORIES,'presets':PRESETS,'report':copy.deepcopy(self.report),'job':dict(self.job),'observed':len(self.observed),'poll_error':self.poll_error,'last_poll':self.last_poll or None,'feed_url':self.feed_url() if config['public_url'] else '', 'feed_path':'/lists/'+self.feed_token+'/filter.txt','version':'1.4.0','hub':self.hub_snapshot()}
+            return {'config':config,'packs':PACKS,'categories':CATEGORIES,'presets':PRESETS,'report':copy.deepcopy(self.report),'job':dict(self.job),'observed':len(self.observed),'poll_error':self.poll_error,'last_poll':self.last_poll or None,'feed_url':self.feed_url() if config['public_url'] else '', 'feed_path':'/lists/'+self.feed_token+'/filter.txt','version':'2.0.0','hub':self.hub_snapshot(),'management':self.management_snapshot(),'network':self.network_snapshot()}
 
 class Handler(BaseHTTPRequestHandler):
     server_version='VenGuard'
@@ -278,20 +284,24 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith('/api/'):
             if not self.auth(): return self.respond({'error':'Log eerst in.'},401)
             if path=='/api/state': return self.respond(self.store.snapshot())
+            if path=='/api/network':return self.respond(self.store.network_snapshot())
+            if path=='/api/profile':return self.respond(self.store.management_snapshot())
+            if path=='/api/profile/section':return self.respond(self.store.desired_read(q.get('section','dns')))
             if path=='/api/connectivity':return self.respond(self.store.connectivity_snapshot())
             if path=='/api/connectivity/export':return self.respond(self.store.connectivity_snapshot(report=True),headers={'Content-Disposition':'attachment; filename="VenGuard-storingsrapport.json"'})
             if path=='/api/security':return self.respond(self.store.security_snapshot())
             if path=='/api/events':return self.respond({'events':copy.deepcopy(self.store.events),'rules':copy.deepcopy(self.store.live_results),'pending':copy.deepcopy(self.store.control_intents)})
             if path=='/api/account': return self.respond(self.store.account_public())
             if path=='/api/central-controls': return self.respond(self.store.read_controls())
-            if path=='/api/central-filters': return self.respond(self.store.agh('filtering/status',settings=self.store.primary()))
+            if path=='/api/central-filters': return self.respond(self.store.desired_filters() if self.store.desired['captured'] else self.store.agh('filtering/status',settings=self.store.primary()))
             if path=='/api/hub': return self.respond(self.store.hub_snapshot())
             if path=='/api/central': return self.respond(self.store.central_read(q.get('section','rules'),q.get('server','')))
             if path=='/api/log':
                 with self.store.lock: rows=copy.deepcopy(self.store.last_log); error=self.store.poll_error
-                search=q.get('search','').lower(); selected=q.get('status','all'); client=q.get('client',''); output=[]
+                search=q.get('search','').lower(); selected=q.get('status','all'); client=q.get('client',''); output=[];hidden_tests=0
                 for row in rows:
                     d=row.get('question',{}).get('name',''); reason=row.get('reason',''); category='blocked' if reason.startswith('Filtered') and reason!='FilteredSafeSearch' else ('rewritten' if reason.startswith('Rewrite') or reason=='FilteredSafeSearch' else ('error' if reason=='NotFilteredError' or row.get('status') not in ('NOERROR','NXDOMAIN') else ('allowed' if row.get('status')=='NOERROR' else 'other')))
+                    if d.rstrip('.').lower()=='example.org' and q.get('tests')!='1':hidden_tests+=1;continue
                     if search and search not in (d+' '+row.get('client','')+' '+row.get('client_info',{}).get('name','')).lower(): continue
                     if selected!='all' and selected!=category: continue
                     if client and row.get('client')!=client: continue
@@ -300,7 +310,7 @@ class Handler(BaseHTTPRequestHandler):
                     with self.store.lock:
                         custom=[r for r in self.store.config['rules'] if d==r['domain'] or (r.get('match','suffix')=='suffix' and d.endswith('.'+r['domain']))]
                     output.append({**row,'classification':annotation,'outcome':category,'custom':custom})
-                return self.respond({'data':output,'count_sample':len(rows),'last_poll':self.store.last_poll,'error':error,'limit':1000,'servers':len(self.store.servers())})
+                return self.respond({'hidden_tests':hidden_tests,'data':output,'count_sample':len(rows),'last_poll':self.store.last_poll,'error':error,'limit':1000,'servers':len(self.store.servers())})
             if path=='/api/check':
                 d=domain(q.get('domain','')); result=self.store.agh('filtering/check_host',query={'name':d,'client':q.get('client',''),'qtype':q.get('type','A')},settings=self.store.selected(q.get('server','')))
                 return self.respond({'domain':d,'adguard':result,'explanation':explain(d),'note':'Dit is een actuele AdGuard-regelcontrole, geen DNS-verzoek vanaf je iPhone.'})
@@ -321,7 +331,7 @@ class Handler(BaseHTTPRequestHandler):
                 offset=max(0,min(int(q.get('offset',0)),1000000))
                 return self.respond({'lines':filtered[offset:offset+100],'total':len(filtered),'offset':offset})
             return self.respond({'error':'Niet gevonden.'},404)
-        files={'/':'index.html','/app.js':'app.js','/style.css':'style.css','/hub.js':'hub.js','/theme.js':'theme.js','/account.js':'account.js','/filters.js':'filters.js','/security.js':'security.js','/simple.js':'simple.js'}
+        files={'/':'index.html','/app.js':'app.js','/style.css':'style.css','/hub.js':'hub.js','/theme.js':'theme.js','/account.js':'account.js','/filters.js':'filters.js','/security.js':'security.js','/simple.js':'simple.js','/workspace.js':'workspace.js'}
         if path not in files: return self.respond({'error':'Niet gevonden.'},404)
         file=ROOT/'static'/files[path]
         return self.respond(file.read_bytes(),ctype={'html':'text/html','js':'text/javascript','css':'text/css'}[file.suffix[1:]])
@@ -344,6 +354,9 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e: self.respond({'error':safe_network_error(e)},400)
     def post(self,path,data):
         s=self.store
+        if path=='/api/network/report':
+            try:return self.respond(s.scanner_report(data,self.headers.get('X-VenGuard-Agent','')))
+            except PermissionError:return self.respond({'error':'Ongeldige scanneragent.'},403)
         if path=='/api/login':
             ip=s.security_ip(self.client_address[0],self.headers.get('X-Forwarded-For','')); now=time.time()
             with s.lock:
@@ -358,6 +371,13 @@ class Handler(BaseHTTPRequestHandler):
             secure='; Secure' if self.headers.get('X-Forwarded-Proto')=='https' else ''
             return self.respond({'ok':True},headers={'Set-Cookie':f'vg_session={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=43200'+secure})
         if not self.auth(): return self.respond({'error':'Log eerst in.'},401)
+        if path=='/api/network/settings':return self.respond(s.network_settings(data))
+        if path=='/api/network/device':return self.respond(s.network_device(data))
+        if path=='/api/network/audit':return self.respond(s.request_audit(data))
+        if path=='/api/profile':
+            if data.get('action')=='adopt':return self.respond(s.adopt_server(data.get('server','')))
+            if data.get('action')=='apply':s.management_event.set();return self.respond({'ok':True,'message':'Centraal profiel wordt naar de servers gestuurd.'})
+            return self.respond(s.desired_write(data.get('section','dns'),data.get('value'),data.get('etag','')))
         if path=='/api/security':return self.respond(s.save_security(data))
         if path=='/api/security/check':return self.respond(s.poll_wazuh())
         if path=='/api/account':
@@ -375,8 +395,10 @@ class Handler(BaseHTTPRequestHandler):
                 current=next((x for x in items if x['id']==sid),None)
                 if action=='delete':
                     if not current:raise ValueError('Server niet gevonden.')
-                    if current['id']==s.config['primary_id']:raise ValueError('Kies eerst een andere bronserver voordat je deze verwijdert.')
+                    if current['id']==s.config['primary_id'] and not s.desired['captured']:raise ValueError('Kies eerst een andere bronserver voordat je deze verwijdert.')
                     items.remove(current)
+                    if current['id']==s.config['primary_id']:s.config['primary_id']=items[0]['id'] if items else ''
+                    if not items:s.config['adguard']={'url':'','username':'','password':''}
                 elif action=='primary':
                     if not current or not current.get('enabled',True):raise ValueError('Kies een ingeschakelde server.')
                     if s.sync_status['running']:raise ValueError('Wacht tot de synchronisatie is afgerond.')
@@ -404,7 +426,7 @@ class Handler(BaseHTTPRequestHandler):
                 if s.sync_status['running']:raise ValueError('Wacht tot de synchronisatie is afgerond voordat je servers wijzigt.')
                 s.config['servers']=items;s.align_primary();s.changed();s.last_cluster_attempt=0
                 s.rules_pending=True
-                s.health.pop(sid,None);s.sync_status['results']={};s.sync_status['state']='queued' if s.config['cluster_sync']['enabled'] else 'idle'
+                s.management_event.set();s.health.pop(sid,None);s.sync_status['results']={};s.sync_status['state']='queued' if s.config['cluster_sync']['enabled'] else 'idle'
             return self.respond({'ok':True})
         if path=='/api/hub/check':
             s.request_connectivity()
@@ -434,8 +456,9 @@ class Handler(BaseHTTPRequestHandler):
             s.request_cluster(allow_dns=True);return self.respond({'ok':True,'message':'Synchronisatie naar alle ingeschakelde replica’s is aangevraagd.'})
         if path=='/api/central':return self.respond(s.central_write(data.get('section',''),data.get('value'),data.get('etag','')))
         if path in ('/api/central-protection','/api/central-filtering'):
-            return self.respond(s.set_controls('protection' if path.endswith('protection') else 'filtering',data.get('enabled')))
+            return self.respond(s.desired_controls('protection' if path.endswith('protection') else 'filtering',data.get('enabled')))
         if path=='/api/central-filters':
+            if s.desired['captured']:return self.respond(s.desired_filter_action(data))
             origin=s.primary();status=s.agh('filtering/status',settings=origin);action=data.get('action')
             if action=='refresh':
                 s.agh('filtering/refresh',{'whitelist':False},settings=origin)
@@ -451,6 +474,7 @@ class Handler(BaseHTTPRequestHandler):
             else:raise ValueError('Ongeldige lijstactie.')
             s.request_cluster();return self.respond({'ok':True})
         if path=='/api/central-rewrite':
+            if s.desired['captured']:return self.respond(s.desired_collection('rewrites',data))
             origin=s.primary();action=data.get('action')
             if action not in ('add','delete'):raise ValueError('Ongeldige actie.')
             host=str(data.get('domain','')).strip();answer=str(data.get('answer','')).strip()
@@ -459,6 +483,7 @@ class Handler(BaseHTTPRequestHandler):
             s.agh('rewrite/'+action,{'domain':host,'answer':answer},settings=origin)
             s.request_cluster();return self.respond({'ok':True})
         if path=='/api/central-client':
+            if s.desired['captured']:return self.respond(s.desired_collection('clients',data))
             origin=s.primary();value=data.get('value');action=data.get('action')
             if action not in ('add','update','delete') or not isinstance(value,dict):raise ValueError('Ongeldige apparaatactie.')
             if action=='update':
@@ -546,7 +571,7 @@ class Handler(BaseHTTPRequestHandler):
             status=s.agh('status'); return self.respond({'ok':True,'version':status.get('version'),'protection_enabled':status.get('protection_enabled')})
         if path=='/api/sync': return self.respond(s.sync())
         if path=='/api/import-sources':
-            result=s.agh('filtering/status'); added=0; ignored=[]
+            result=s.desired_filters() if s.desired['captured'] else s.agh('filtering/status'); added=0; ignored=[]
             with s.lock:
                 for item in result.get('filters',[]):
                     url=item.get('url','')
@@ -572,7 +597,7 @@ def main():
         logging.info('Beheerwachtwoord staat in het databestand admin-password. Bekijk dit alleen op je eigen host.')
     server=BoundedHTTPServer(('0.0.0.0',int(os.getenv('VENGUARD_PORT','8098'))),Handler)
     server.store=store; server.daemon_threads=True
-    for target in (store.worker,store.monitor_worker,store.cluster_worker,store.operations_worker,store.security_worker,store.connectivity_worker):
+    for target in (store.worker,store.monitor_worker,store.cluster_worker,store.operations_worker,store.security_worker,store.connectivity_worker,store.management_worker):
         threading.Thread(target=target,daemon=True).start()
     logging.info('VenGuard gestart op poort %s',server.server_port)
     try: server.serve_forever()

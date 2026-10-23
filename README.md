@@ -1,6 +1,6 @@
 # VenGuard
 
-Centraal filterbeheer voor **AdGuard Home en Pi-hole v6**. Combineer DNS-filterbronnen zonder dubbele regels, bekijk verzoeken van meerdere servers en pas gerichte uitzonderingen rechtstreeks toe. Dark mode is standaard; light mode wordt per browser onthouden.
+**VenGuard 2.0** is een centrale beheerschil voor **AdGuard Home en Pi-hole v6**. Combineer DNS-filterbronnen zonder dubbele regels, bekijk verzoeken van meerdere servers en pas gerichte uitzonderingen rechtstreeks toe. Dark mode is standaard; light mode wordt per browser onthouden.
 
 ## Installeren en bijwerken
 
@@ -22,67 +22,74 @@ bash update.sh
 
 Het datavolume, account, serverkoppelingen en eigen regels blijven behouden. Eerdere keuzepakketten worden eenmalig overgenomen als gewone domeinregels. Eerdere brede bereikbaarheidspresets worden als **uitgeschakelde** regels bewaard: controleer zo nodig het werkelijk benodigde subdomein. Nieuwe installaties bevatten geen voorgedefinieerde website-uitzonderingen of uitgeverspakketten.
 
-Versie **1.4.0** vereenvoudigt het dashboard en voegt onafhankelijke verbindingsmetingen met een storingshistorie toe.
+## Vier compacte onderdelen
 
-## Eenvoudig overzicht en storingen (1.4)
+- **Centraal beheer:** klikbaar dashboard met de gepubliceerde VenGuard-regels, bereikbare DNS-servers, actieve AdGuard-lijsten, regels op de servers en online/offline apparaten. Klik door naar het bijbehorende beheer. Serverdetails blijven ingeklapt onder de naam en status.
+- **Adblocker voor AdGuard:** bronnen samenvoegen, categorieën en lijsten schakelen, DNS-verzoeken bekijken en eigen tijdelijke of blijvende uitzonderingen beheren.
+- **Netwerk:** apparaten ontdekken, namen/type/notities invullen, online/offline/onbekend en laatst online bekijken.
+- **Instellingen:** het centrale AdGuard-profiel, servers, lijstpublicatie, account/2FA en beveiliging. Dark mode is standaard; light mode wordt onthouden.
 
-Het hoofdmenu bevat **Overzicht**, **DNS-verzoeken**, **Filters**, **Eigen keuzes** en **Status & storingen**. Account, beveiliging, lijstpublicatie en geavanceerde DNS-editors staan onder **Instellingen & extra’s**. Bestaande adressen zoals `#central` blijven werken. Dark mode blijft standaard.
+## VenGuard is de bron voor de instellingen
 
-Bij **Status & storingen** zie je per server DNS, beheer en filtering. Technische gegevens en synchronisatie-instellingen zijn uitklapbaar. De actuele beschermingsstand wordt bij een mislukte beheerverbinding als onbekend weergegeven, niet als een bevestigde actuele instelling.
+Bij de eerste start na de update neemt VenGuard de gedeelde instellingen van de bestaande geselecteerde AdGuard-server over. Die staan daarna zelfstandig in `/data/desired-settings.json`. Je kunt dit ook expliciet doen bij **Instellingen → Instellingen overnemen**. Dit is een eenmalige import; de oorspronkelijke server hoeft vervolgens niet online te zijn om een andere server in te richten.
 
-- **Iedere 15 seconden, onafhankelijk van het beheer:** een echte UDP-DNS-aanvraag voor `example.org` aan elk ingesteld DNS-IP. Na een mislukking wordt eenmaal opnieuw geprobeerd en aanvullend DNS over TCP getest. SERVFAIL, REFUSED, NXDOMAIN, lege antwoorden en blokkeeradressen worden onderscheiden van een ontbrekend antwoord. Een NXDOMAIN bewijst wel een reagerende server, maar geen geslaagde omzetting van de testnaam.
-- **Externe verbinding:** TCP naar `1.1.1.1:443` en `8.8.8.8:443`, zonder DNS te gebruiken. Eén geslaagde verbinding toont bereikbaarheid van die bestemming; mislukking van beide tests bewijst geen providerstoring. Deze tests wijzigen geen upstreams en sturen geen gebruikersverkeer om.
-- **Beheer:** de bestaande controle blijft iedere ronde de API en filterstand controleren. Een trage API of het ophalen van verzoekenlogs houdt de aparte DNS-metingen niet op. “Nu controleren” start controles op de achtergrond en antwoordt meteen, zodat een reverse-proxy-timeout niet als DNS-uitval wordt gepresenteerd.
-- **Bewijs bewaren:** maximaal 200 incidenten met begin, laatst waargenomen fout en herstel, plus maximaal 24 uur meetpunten (hoogstens één per minuut). Het scherm toont de laatste 12 incidenten. **Download rapport** bevat alle bewaarde incidenten, meetpunten, servernamen/IP’s en recente VenGuard-beheeracties, zonder serverwachtwoorden, gebruikersnamen, lijsttokens of DNS-verzoekenlog.
-- **Correlatie:** beheeracties vlak voor een storing zijn zichtbaar. Een overeenkomstig tijdstip is geen bewezen oorzaak. Bij herstart van VenGuard wordt een open incident afgesloten met *meting beëindigd*, zonder een verzonnen hersteltijd of uitvalduur voor de niet-gemeten periode.
-- **Filterdiagnose per server:** open de meetdetails en kies **Filterinstellingen controleren** om globale schakelaars, actieve lijsten en apparaten met eigen filtering uit te lezen.
-- **Browserverbinding:** fouten tussen je browser en VenGuard/reverse proxy verschijnen apart bovenaan. Een verdwenen dashboardverbinding wordt niet automatisch uitgelegd als een defecte DNS-server.
+1. Installeer AdGuard Home en rond alleen de eerste installatiewizard af: web/DNS-binding en gebruikersnaam/wachtwoord. De DNS-poort moet beschikbaar zijn. Geen filterlijsten handmatig toevoegen.
+2. Voeg de server in VenGuard toe via **Instellingen → AdGuard-servers**. Gebruik de werkelijke beheer-URL/webpoort en het aparte DNS-IP/poort (meestal 53).
+3. Vul het bereikbare **LAN-adres van VenGuard** in, bijvoorbeeld `http://192.168.0.10:8098`. Gebruik geen `localhost` als een andere host de lijst moet ophalen.
+4. VenGuard stuurt het opgeslagen profiel naar alle ingeschakelde AdGuard-servers en koppelt de eigen samengestelde filterlijst. Per server zie je welke profielversie is bevestigd of welke fout nog openstaat.
+5. Bewerk gedeelde instellingen voortaan in VenGuard. Wijzigingen rechtstreeks in AdGuard worden bij de volgende vergelijking teruggezet naar het VenGuard-profiel. Voeg extra bronnen bij voorkeur toe als VenGuard-bron, zodat ze in dezelfde deduplicatie vallen.
 
-Alle metingen worden uitgevoerd **vanuit de VenGuard-container**. Ze bewijzen niet dat een telefoon dezelfde DNS gebruikt, dat wifi werkt of dat alle upstreams bereikbaar zijn. `example.org` kan uit de DNS-cache komen. VenGuard kan geen eerdere storing reconstrueren en leest zonder aanvullende koppeling geen Docker-, host-, switch- of routerlogs uit. De oorzaak van een hostherstart, geheugenprobleem, defecte kabel of upstreamstoring vereist nog die logs. Duur en hersteltijden zijn benaderingen op basis van de meetmomenten; korte storingen tussen de controles kunnen worden gemist.
+Het profiel beheert upstreams/cache, toegangsregels, eigen native AdGuard-regels, DNS-herschrijvingen, apparaatinstellingen, geblokkeerde diensten, Safe Browsing/Safe Search/ouderlijk toezicht, verzoekenlog/statistiekconfiguratie, native filterabonnementen en bescherming/filterstand. De API past alleen afwijkende waarden aan en leest ze terug ter bevestiging. Servers worden achtereenvolgens ingericht. Luisteradressen/poorten, DHCP, TLS-bestanden en loginaccounts blijven per server ingesteld; die kun je niet veilig blind klonen. Het is dus geen volledige kopie van `AdGuardHome.yaml`.
 
-Bewaar een rapport na een storing om DNS-uitval, alleen een beheerfout, een extern verbindingsprobleem en uitgeschakelde filtering te onderscheiden. Verbindingsmetingen staan in `/data/connectivity.json` en blijven bij een gewone update behouden.
+De achtergrondvergelijking loopt iedere twee minuten en direct na een wijziging. Een onbereikbare server blijft niet bevestigd en krijgt later een nieuwe poging. De oude Go Sync-engine blijft voor compatibiliteit in de image aanwezig, maar voert geen automatische bron-naar-replica-rondes meer uit zodra het centrale profiel actief is. Stop een los draaiende AdGuard Sync om twee concurrerende beheerders te voorkomen.
 
-## Wat versie 1.3 verandert
+DNS-aanvragen gaan rechtstreeks naar je AdGuard/Pi-hole-servers. Een VenGuard-uitval onderbreekt hun opgeslagen DNS-configuratie niet. Je router/DHCP moet beide DNS-IP's uitdelen; VenGuard kan dat niet via je Deco instellen. Twee servers op dezelfde fysieke host beschermen niet tegen een hoststoring. Dit is een verschil tussen centraal **beheer** en de route van het DNS-verkeer, geen ontbrekende synchronisatie.
 
-- **Bescherming aan/uit is een kleine opdracht:** eerst de werkelijke stand lezen; als die al klopt wordt niets geschreven. Bij ingeschakelde algemene sync wordt dezelfde stand op de gekozen servers bevestigd. Deze knop start geen volledige synchronisatie en downloadt geen lijsten.
-- **Geen automatische DNS-herconfiguratie:** periodieke AdGuard Sync-rondes kopiëren geen upstreams/cache/DNS-serverconfiguratie. Die onderdelen worden alleen meegenomen bij **Nu alles synchroniseren** of expliciet opslaan in de DNS-editor. Het opnieuw verzenden van sommige AdGuard DNS-instellingen kan DNS herstarten, zelfs bij dezelfde waarden.
-- **Concrete verbindingsfouten:** timeout, geweigerde verbinding, geen route, naamresolutie en echte TLS-fouten krijgen verschillende meldingen. Recente beheeracties en niet bevestigde opdrachten staan apart van historische sync-resultaten.
-- **Directe eigen regels:** eigen domeinregels gaan via de API naar alle ingeschakelde servers, onafhankelijk van het downloaden van de samengevoegde bronlijst. Een onbereikbare server houdt de andere niet tegen. VenGuard probeert openstaande wijzigingen later opnieuw.
-- **Gerichte, tijdelijke uitzonderingen:** standaard alleen de exacte hostnaam, optioneel inclusief subdomeinen. Kies blijvend, 15 minuten, 1 uur of 1 dag. Uitgeschakelde/verlopen regels worden uit het beheerde serverblok verwijderd. Een offline server kan pas worden bijgewerkt als die terugkomt; de toepassing blijft zichtbaar als niet bevestigd.
-- **Pi-hole v6:** status, blokkeringsschakelaar, gecombineerd verzoekenlog, bestaande lijsten, Gravity-updates, eigen globale domeinregels en aparte blokkeer-/toestaanfeeds.
+Pi-hole v6 gebruikt de gedeelde VenGuard-filterfeeds, eigen domeinregels, verzoekenlog en blokkeringsstand. Het AdGuard-profiel wordt niet naar Pi-hole vertaald. Gebruik bij Pi-hole-2FA een app-wachtwoord. URLs met `/control` (AdGuard) of `/admin`/`/api` (Pi-hole) worden herkend; certificaatvalidatie blijft aan.
 
-Een tijdelijke beheer-API-fout bewijst niet dat DNS uitligt. De twee controles staan apart. De nieuwe diagnose herstelt geen onjuiste poort, firewall, netwerkroute of onbereikbare host.
+## Waarom 600.000 regels opeens 53 konden worden
 
-## Servers toevoegen
+De vroegere modus **Alleen gezien** selecteerde alleen bronregels voor recent waargenomen domeinen. Die selectie kon veel kleiner zijn dan de gedownloade bronnen. Versie 2.0 migreert bestaande installaties één keer naar **Volledige bronnen**. Je kunt daarna bewust opnieuw een compacte selectie kiezen, maar dat is niet de standaard.
 
-1. Open **Status & storingen → Server toevoegen**.
-2. Kies **AdGuard Home** of **Pi-hole v6**.
-3. Geef het beheeradres op. Voorbeelden: `http://192.168.0.10:3000` of `http://192.168.0.20`. Gebruik de werkelijke webpoort, niet de DNS-poort.
-4. AdGuard: vul gebruikersnaam en wachtwoord in. Pi-hole: vul het wachtwoord of app-wachtwoord in; gebruikersnaam is niet nodig. Bij Pi-hole-2FA gebruik je een **app-wachtwoord**. VenGuard bewaart en hergebruikt één API-sessie per server.
-5. Vul het echte **DNS-IP** en de **DNS-poort**, meestal 53, in. De UDP-test staat los van het beheeradres.
-6. Kies een bronserver voor het importeren van lijsten en de geavanceerde AdGuard-editor.
-7. Vul bij **Instellingen** het bereikbare **LAN-adres van VenGuard** in. Gebruik geen `localhost` voor toegang vanuit een andere container.
-8. Open **Mijn filterlijst → Koppel / ververs** om de abonnementen aan te bieden. Een Pi-hole Gravity-update kan langer duren dan een normale beheeractie. De API-gebruiker moet die actie mogen uitvoeren.
+Het dashboard onderscheidt de unieke gepubliceerde VenGuard-bronregels van de aantallen die AdGuard rapporteert. De AdGuard-telling is een som over servers en kan dezelfde regels dus meerdere keren bevatten. Eigen live-regels staan apart van de bronlijst. Een gedownloade bron die meer dan 80% krimpt na minimaal 1.000 bestaande regels wordt niet blind gepubliceerd: de laatste goede cache blijft actief met een foutmelding. Ook een ontbrekende actieve bron mag een grote bestaande publicatie niet vervangen. Bewust uitschakelen/verwijderen van bronnen blijft mogelijk. Deze controles bewijzen niet achteraf wat de oorzaak van jouw eerdere telling was.
 
-URLs die eindigen op `/control` (AdGuard) of `/admin`/`/api` (Pi-hole) worden voor de beheerverbinding herkend. HTTPS-certificaten worden gecontroleerd; certificaatvalidatie wordt niet uitgeschakeld.
+## Filterbronnen samenvoegen
 
-**Continuïteit:** laat je router/DHCP beide DNS-IP’s aan apparaten meegeven. VenGuard staat niet in het DNS-verkeerspad. Bij uitval van VenGuard blijven de DNS-servers hun opgeslagen regels gebruiken. Twee DNS-servers op dezelfde host beschermen niet tegen uitval van die host. Clients kunnen beide servers gebruiken; bij uitval kan omschakelen vertraging geven.
+Begin met de algemene basis **HaGeZi Light** en voeg naar behoefte eigen publieke HTTPS-bronnen of optionele beveiligings-/inhoudslijsten toe. Nederlandse en internationale domeinlijsten worden op dezelfde manier verwerkt. Er zijn geen ingebouwde website-uitzonderingen of uitgeverspakketten. Categorieën zijn beheerlabels; je kunt een bron of categorie uitschakelen zonder verwijderen. Bekijk per bron aantallen, overlap, laatste download en fouten.
 
-## Eén verzameling bronnen
+Standaard wordt elke 24 uur bijgewerkt; kies 6, 12, 24 of 48 uur bij Instellingen. Mislukte downloads behouden de laatste goede cache. Complete domeinregels, hostsregels en eenvoudige `||domein^`/`@@||domein^` worden overgenomen. Browserregels, URL-paden, regexen en geavanceerde modifiers uit externe bronnen worden overgeslagen, niet verbreed. Limieten: 30 bronnen, 24 MiB per download, 1 miljoen opgeslagen bronregels. Losse native AdGuard-abonnementen onder de geavanceerde lijstopties vallen niet in de VenGuard-deduplicatie; importeer ze als bron en schakel het oude abonnement uit om overlap te vermijden.
 
-Open **Filters & categorieën**:
+## DNS- en pingcontrole van regels
 
-- Begin met de rustige algemene basis **HaGeZi Light**.
-- Voeg zo nodig Threat Intelligence Mini, volwassen-inhoud- of goklijsten toe. Deze opties worden niet vanzelf ingeschakeld.
-- Voeg eigen publieke HTTPS-lijsten toe of importeer de ingeschakelde blokkeerlijsten van je bronserver.
-- Deel bronnen in categorieën in. De categorie is een beheerlabel; een bron kan inhoudelijk meerdere soorten regels bevatten.
-- Zet een bron of categorie uit zonder die te verwijderen.
-- Bekijk per bron regels, geselecteerde regels, overlap, laatste download en eventuele fouten.
-- Schakel na controle oude overlap uit bij **Bestaande lijsten op de bronserver**. Zolang andere lijsten actief zijn, kunnen die blijven blokkeren.
+Open **Adblocker → Mijn filterlijst**. Controleer één domein of een steekproef van maximaal 25 domeinen uit de gepubliceerde lijst. De scanneragent doet een DNS-opzoeking en, bij een publiek IPv4-adres, een ICMP-ping. De resultaten blijven zichtbaar met tijdstip. Er is bewust geen automatische verwijdering.
 
-Standaard wordt elke 24 uur bijgewerkt; in Instellingen kies je 6, 12, 24 of 48 uur. Een mislukte download behoudt de laatste goede cache. De import neemt complete domeinregels, hostsregels en eenvoudige `||domein^`/`@@||domein^`-regels over. Browserregels, URL-paden, regexen en geavanceerde modifiers uit externe bronnen worden overgeslagen, niet verbreed.
+Een ping-timeout betekent niet dat een domein verouderd is: veel servers weigeren ICMP. Een mislukte DNS-opzoeking kan juist door je eigen adblocker komen. Ook een tijdelijke fout of opgeheven hostnaam bewijst niet dat een toekomstige blokkaderegel overbodig is. De scan gebruikt de DNS-resolver van de Docker-host en beoordeelt geen website-inhoud.
 
-Limieten: 30 bronnen, 24 MiB per download, 1 miljoen opgeslagen bronregels. De volledige modus dekt nieuwe domeinen meteen volgens de bron; **Alleen gezien** selecteert uit log-steekproeven van maximaal 30 dagen en blokkeert nieuwe domeinen pas na waarnemen en verversen. Gebruik de volledige modus voor beveiligingslijsten.
+## Netwerkscanner
+
+`bash update.sh` bouwt en start ook de afzonderlijke **venguard-scanner**. Schakel scannen bij **Netwerk** in en vul je eigen lokale IPv4-subnet in, bijvoorbeeld `192.168.0.0/24`. Maximaal vier privé-subnetten van ieder 256 adressen; iedere twee minuten een Nmap-hostdetectie, geen poortscan. **Opslaan & scannen** vraagt een nieuwe scan aan.
+
+De scanner vindt waar mogelijk IP, MAC, hostnaam en fabrikant op basis van het MAC-prefix. Een fabrikant is geen zekere apparaatidentificatie. Zelf ingevulde naam, type en notities blijven bewaard. Een reactie betekent online; na drie volledige succesvolle scans zonder reactie wordt een apparaat offline. Bij ontbrekende/oude scannerdata blijft de status onbekend, met de laatst geziene tijd. Slapende apparaten kunnen onterecht offline lijken. MAC-randomisatie en wisselende IP's kunnen dubbele of veranderde herkenning geven.
+
+De aparte Linux Docker-helper gebruikt host-netwerk en uitsluitend `NET_RAW` voor hostdetectie. Geen Docker-socket, `NET_ADMIN`, privileged mode of inkomende scannerpoort. Hij deelt alleen scannerconfiguratie en een eigen beperkt report-token met de webcontainer; niet de AdGuard-loginbestanden. De hoofdcontainer blijft zonder netwerkcapabilities. `venguard-network` is het afzonderlijke gedeelde volume. Bij een aangepaste bind-poort/hostnaam moet de agent het ingestelde VenGuard-adres kunnen bereiken.
+
+Detectie kan alleen apparaten zien die vanaf de NUC bereikbaar zijn. Gastnetwerken, IoT-isolatie, VLANs en mesh kunnen MAC-informatie of alle antwoorden afschermen. Er is geen uitlezing van de Deco-DHCP-tabel. Dit vervangt geen routermonitor of packet capture en ziet niet al het in-/uitgaande verkeer.
+
+**Internet blokkeren:** met de Deco XE75 Pro is hiervoor geen ondersteunde koppeling ingebouwd. Gebruik de Deco-app voor een echte apparaatblokkade. VenGuard toont dit bij het apparaat en doet niet alsof een DNS-blokkade alle internetverkeer stopt.
+
+## Verbindingsproblemen onderzoeken
+
+Bij **Centraal beheer → DNS-servers bereikbaar** zie je afzonderlijk DNS, beheer-API en filtering. Technische gegevens zijn uitklapbaar. Een beheerfout bewijst geen DNS-uitval; een opgeslagen gewenste stand is pas toegepast als de server die bevestigt.
+
+- Iedere 15 seconden een onafhankelijke UDP-DNS-test naar elk ingesteld DNS-IP voor `example.org`, met één herhaling en TCP-test bij problemen. SERVFAIL, REFUSED, NXDOMAIN, lege antwoorden en blokkeeradressen worden onderscheiden van een ontbrekend antwoord.
+- TCP-bereikbaarheid naar `1.1.1.1:443` en `8.8.8.8:443`, zonder DNS. Mislukking van beide bewijst geen providerstoring.
+- API-, TLS-, route- en poortfouten blijven apart zichtbaar. **Nu controleren** start op de achtergrond; een trage beheeractie houdt DNS-metingen niet tegen.
+- Storingshistorie: maximaal 200 incidenten en 24 uur meetpunten. Download een rapport met tijden, fouten en recente beheeracties, zonder servercredentials/lijsttokens/verzoekenlog. Een tijdsovereenkomst is geen bewezen oorzaak. De rapportage blijft in `/data/connectivity.json` bewaard.
+- Browserverbindingsfouten staan apart van servermetingen. Filterdiagnose leest de globale schakelaars en eventuele apparaatuitzonderingen.
+
+**Waar komt `example.org` vandaan?** Dat is VenGuards eigen DNS-testnaam. De VenGuard-verzoekenpagina verbergt deze standaard; vink **Toon testnaam example.org** aan om die weer te zien. De originele AdGuard-log wordt niet verwijderd en blijft de controles tonen. De testnaam wordt niet als gebruikersactiviteit meegenomen in compacte lijstselectie. De DNS-check uitschakelen is niet nodig om de weergave op te ruimen.
+
+Alle verbindingsmetingen komen vanuit de VenGuard-container. Ze bewijzen niet dat je telefoon dezelfde DNS gebruikt of dat wifi goed werkt. Een test kan uit DNS-cache komen en controleert niet alle upstreams. VenGuard leest geen historische host-, Docker-, kabel-, switch- of routerstoringen terug. De oorzaak van jouw bestaande uitval is zonder meetrapport/hostlogs nog niet vastgesteld. Bewaar een rapport na de volgende storing.
 
 ## Een vastlopende functie direct vrijgeven
 
@@ -100,25 +107,13 @@ Eigen regels staan in een herkenbaar VenGuard-blok tussen de overige AdGuard-reg
 
 DNS kan advertenties van aparte advertentiedomeinen blokkeren. Het kan een gesponsord onderdeel en gewenste inhoud op **dezelfde hostnaam** niet inhoudelijk onderscheiden. Daarvoor is aanvullend een browserfilter nodig. De lokale uitleg bij een domein is een transparante naamindicatie, geen reputatiedienst of inhoudsanalyse.
 
-## Wat wordt gesynchroniseerd?
+## Back-ups vóór wijzigingen
 
-| Functie | AdGuard Home | Pi-hole v6 |
-| --- | --- | --- |
-| Beheerstatus en onafhankelijke DNS-test | Ja | Ja |
-| Bescherming aan/uit | Ja | Eén blokkeringsschakelaar |
-| Verzoekenlog | Ja | Genormaliseerd in hetzelfde overzicht |
-| Samengevoegde bronnen | AdGuard-abonnement | Afzonderlijk blokkeer- en toestaanabonnement |
-| Exacte en subdomeinregels | Beheerd regelblok | Exacte/regex-domeinen in standaardgroep 0 |
-| Apparaat-IP-regels | Ja | Niet vertaald; gebruik Pi-hole-groepen |
-| Geavanceerde instellingen kopiëren | AdGuard → AdGuard | Geen vertaling van AdGuard-instellingen |
-
-De ongewijzigde **AdGuardHome Sync v0.9.4** is in de Docker-container opgenomen. Kies de onderdelen bij Status & storingen. De bron blijft leidend; replica’s worden niet automatisch gepromoveerd. Pi-hole wordt nooit als AdGuard-replica aan deze engine doorgegeven. Met een Pi-hole-bron worden alleen de gedeelde VenGuard-functies gebruikt. Stop een eventueel nog los draaiende AdGuard Sync zodra je deze ingebouwde sync gebruikt.
-
-DHCP, luisterinterfaces/poorten, TLS-certificaten en AdGuard-gebruikers worden niet gekloond. Voor zover bereikbaar worden vóór geavanceerde wijzigingen lokale snapshots bewaard in `/data/settings-backups`, maximaal 20; er is geen automatische rollback. Een gedeeltelijk mislukte actie blijft zichtbaar. Recente acties bevatten geen wachtwoorden of ruwe serverlogs.
+Vóór een nieuwe profielversie bewaart VenGuard waar bereikbaar een AdGuard-snapshot in `/data/settings-backups` (maximaal 20). Vorige centrale profielen staan in `/data/profile-backups` (maximaal 20). Er is geen automatische rollback. Gedeeltelijke fouten blijven per server zichtbaar; een mislukking wordt niet als bevestigde synchronisatie weergegeven.
 
 ## Beveiliging en Wazuh
 
-**VenGuard is geen router, firewall of DDoS-filter.** De container heeft geen host-netwerkrechten, packet capture of firewallbevoegdheden gekregen. De DNS-dienst blijft los van VenGuard werken.
+**VenGuard is geen router, firewall of DDoS-filter.** De hoofdcontainer heeft geen host-netwerkrechten, packet capture of firewallbevoegdheden. De aparte scanner gebruikt host-netwerk en NET_RAW uitsluitend voor hostdetectie en aangevraagde domeinchecks. De DNS-dienst blijft los van VenGuard werken.
 
 De pagina **Beveiliging** toont:
 
@@ -199,7 +194,7 @@ Deze back-up bevat de servercredentials en eventuele 2FA-sleutel. Herstel `data`
 
 ## Ontwikkeling en verificatie
 
-Python 3.12-standaardbibliotheek, HTML/CSS/JavaScript en de echte Go Sync-engine; geen PHP en geen pip-/npm-afhankelijkheden voor productie. De container draait niet als root, met alleen-lezen image en schrijfbare data in `/data`.
+Python 3.12-standaardbibliotheek, HTML/CSS/JavaScript, Nmap/iputils in de aparte scanner en de gebundelde Go Sync-engine; geen PHP en geen pip-/npm-afhankelijkheden voor productie. De container draait niet als root, met alleen-lezen image en schrijfbare data in `/data`.
 
 ```bash
 python3 -m unittest discover -s tests -v
@@ -211,7 +206,7 @@ node --check app/static/security.js
 bash -n start.sh update.sh
 ```
 
-GitHub Actions bouwt en start de productiecontainer, controleert authenticatie, test de echte gebundelde Sync-engine tegen lokale testservers en test Pi-hole tegen een afzonderlijke officiële wegwerpcontainer. `scripts/preview.py` is alleen een geïsoleerde UI-demo zonder echte servers of productie-authenticatie; gebruik die niet voor installatie.
+GitHub Actions bouwt en start de productiecontainer, controleert authenticatie, test de echte gebundelde Sync-engine tegen lokale testservers en test Pi-hole tegen een officiële wegwerpcontainer en controleert de scanneragent. Een integratietest richt twee schone officiële AdGuard Home-servers in en past het opgeslagen profiel toe terwijl de oorspronkelijke server onbereikbaar is. `scripts/preview.py` is alleen een geïsoleerde UI-demo zonder echte servers of productie-authenticatie; gebruik die niet voor installatie.
 
 ## Bronnen en licenties
 

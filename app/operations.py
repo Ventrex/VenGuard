@@ -39,7 +39,7 @@ class OperationsMixin:
         if field not in ('protection','filtering') or not isinstance(enabled,bool):raise ValueError('Ongeldige beschermingsopdracht.')
         origin=self.primary();feature='general' if field=='protection' else 'filters'
         targets=[origin]
-        if self.config['cluster_sync']['enabled'] and self.config['cluster_sync']['features'].get(feature):targets=[s for s in self.servers() if s.get('enabled',True)]
+        if getattr(self,'desired',{}).get('captured') or (self.config['cluster_sync']['enabled'] and self.config['cluster_sync']['features'].get(feature)):targets=[s for s in self.servers() if s.get('enabled',True)]
         if field=='filtering' and kind(origin)=='pihole':raise ValueError('Pi-hole heeft één blokkeringsschakelaar; gebruik Bescherming aan/uit.')
         targets=[s for s in targets if field!='filtering' or kind(s)=='adguard']
         with self.lock:

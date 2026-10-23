@@ -203,6 +203,27 @@ class IntegrationTests(unittest.TestCase):
         self.assertIn('||old.example.net^',(self.s.dir/'filter.txt').read_text())
         self.assertTrue(self.s.report['sources'][0]['cached_fallback'])
         self.s.config['sources']=old;self.s.caches=oldcache
+    def test_shrinking_source_keeps_published_rules(self):
+        old=copy.deepcopy(self.s.config['sources']);oldcache=copy.deepcopy(self.s.caches);publication=(self.s.dir/'filter.txt').read_text()
+        try:
+            self.s.config['sources']=[{'id':'guard','name':'Guard','url':'https://example.org/filter.txt','enabled':True}]
+            rules=['||ad'+str(i)+'.example.net^' for i in range(1200)]
+            self.s.caches={'guard':{'rules':rules,'fetched':utc()}};self.s.rebuild(False)
+            with patch('server.download',return_value='||one.example.net^'):self.s.rebuild(True)
+            self.assertEqual(self.s.report['count'],1200)
+            self.assertIn('80%',self.s.caches['guard']['error'])
+            self.s.caches={}
+            with self.assertRaises(ValueError):self.s.rebuild(False)
+            self.assertIn('||ad1199.example.net^',(self.s.dir/'filter.txt').read_text())
+        finally:
+            self.s.config['sources']=old;self.s.caches=oldcache;(self.s.dir/'filter.txt').write_text(publication);self.s.rebuild(False)
+    def test_health_test_name_hidden_without_deleting_original_log(self):
+        original=copy.deepcopy(self.s.last_log)
+        try:
+            self.s.last_log=[{'question':{'name':'example.org.'},'reason':'NotFilteredNotFound','status':'NOERROR'}, {'question':{'name':'content.example.net'},'reason':'NotFilteredNotFound','status':'NOERROR'}]
+            hidden=self.call('log');self.assertEqual(hidden['hidden_tests'],1);self.assertEqual(len(hidden['data']),1)
+            shown=self.call('log?tests=1');self.assertEqual(len(shown['data']),2);self.assertEqual(len(self.s.last_log),2)
+        finally:self.s.last_log=original
     def test_import_only_enabled_sources_and_preserve_custom_rules(self):
         original=copy.deepcopy(self.agh.filters)
         self.agh.filters.extend([{'id':1,'name':'Enabled','url':'https://example.org/one.txt','enabled':True},{'id':2,'name':'Disabled','url':'https://example.org/two.txt','enabled':False}])
