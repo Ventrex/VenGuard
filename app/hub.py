@@ -178,6 +178,9 @@ class HubMixin:
             def inspect(s):
                 with self.lock:previous=copy.deepcopy(self.health.get(s['id'],{}))
                 health={'checked_at':now_iso(),'checked_epoch':time.time(),'api_ok':False,'error':'','protection_enabled':None,'filtering_enabled':None,'last_success':previous.get('last_success')}
+                # A failed API read must not turn hundreds of thousands of rules into zero.
+                for key in ('active_filters','active_lists','server_filter_rules','native_rules','filter_counts_at'):
+                    if key in previous:health[key]=previous[key]
                 for attempt in range(2):
                     try:
                         start=time.monotonic();result=self.agh('status',settings=s)
@@ -190,7 +193,9 @@ class HubMixin:
                     try:
                         filtering=self.agh('filtering/status',settings=s)
                         health['filtering_enabled']=filtering.get('enabled');health['controls_checked_at']=now_iso();health['controls_epoch']=time.time()
-                        health['server_filter_rules']=sum(f.get('rules_count',0) or 0 for f in filtering.get('filters',[]) if f.get('enabled'))
+                        lists=filtering.get('filters',[])+filtering.get('whitelist_filters',[])
+                        health['server_filter_rules']=sum(f.get('rules_count',0) or 0 for f in lists if f.get('enabled'))+len(filtering.get('user_rules',[]))
+                        health['active_lists']=sum(bool(f.get('enabled')) for f in lists);health['filter_counts_at']=now_iso()
                         health['active_filters']=sum(bool(f.get('enabled')) for f in filtering.get('filters',[]))
                         health['native_rules']=len(filtering.get('user_rules',[]))
                         health['venguard_feed']=any(f.get('enabled') and f.get('url')==self.feed_url() for f in filtering.get('filters',[])) if self.config.get('public_url') else None

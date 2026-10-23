@@ -34,6 +34,11 @@ class HubTests(unittest.TestCase):
         self.store.calls=[];self.store.offline=set();self.store.user_rules={'one':['||original.example.net^'],'two':['@@||replica.example.net^']}
         self.store.config['servers']=copy.deepcopy(SERVERS);self.store.config['primary_id']='one';self.store.align_primary();self.store.config['public_url']='http://192.0.2.20:8098'
     def tearDown(self):self.tmp.cleanup()
+    def test_rule_counts_survive_a_management_outage(self):
+        self.store.health['one']={'active_lists':4,'active_filters':3,'server_filter_rules':600000,'native_rules':2,'filter_counts_at':'last-good','last_success':'last-good'}
+        self.store.offline={'one'}
+        self.store.monitor(include_dns=False)
+        health=self.store.health['one'];self.assertFalse(health['api_ok']);self.assertEqual(health['server_filter_rules'],600000);self.assertEqual(health['filter_counts_at'],'last-good')
     def test_partial_feed_does_not_skip_healthy_server(self):
         self.store.offline={'one'};result=self.store.publish_all()
         self.assertFalse(result['ok']);self.assertTrue(result['results']['two']['ok'])

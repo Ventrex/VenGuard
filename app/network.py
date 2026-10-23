@@ -19,9 +19,11 @@ class NetworkMixin:
         if path.exists():self.network.update(json.loads(path.read_text()))
         token_path=self.network_dir/'agent-token'
         if not token_path.exists():write_private(token_path,{'token':secrets.token_urlsafe(32)})
+        os.chmod(token_path,0o640)  # Scanner's supplementary group reads this narrow volume only.
         self.network_token=json.loads(token_path.read_text())['token'];self.write_scanner_config()
     def write_scanner_config(self):
         write_private(self.network_dir/'scanner.json',{'enabled':self.network['enabled'],'subnets':self.network['subnets'],'interval':120,'scan_request':self.network.get('scan_request',0),'url':self.config.get('public_url',''),'audit_job':self.network.get('audit_job')})
+        os.chmod(self.network_dir/'scanner.json',0o640)
     def save_network(self):
         write_private(self.dir/'network.json',self.network);self.write_scanner_config()
     def network_snapshot(self):

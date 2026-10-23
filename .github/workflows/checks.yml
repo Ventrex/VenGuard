@@ -59,21 +59,6 @@ jobs:
       - name: Test de gebundelde echte AdGuard Sync-engine
         run: |
           docker exec -i -e ADGUARD_SYNC_BINARY=/usr/local/bin/adguardhome-sync venguard python3 -c "import sys; __file__='/tmp/test_native_sync.py'; exec(compile(sys.stdin.read(), __file__, 'exec'))" < tests/test_native_sync.py
-      - name: Start officiële Pi-hole v6 voor integratietest
-        run: |
-          docker run -d --name venguard-pihole-test --add-host=host.docker.internal:host-gateway -p 127.0.0.1:18080:80 -e FTLCONF_webserver_api_password=ci-only-pihole-password -e FTLCONF_dns_listeningMode=ALL pihole/pihole:2026.10.0
-          for attempt in $(seq 1 90); do
-            if curl --fail --silent http://127.0.0.1:18080/api/info/login >/dev/null; then exit 0; fi
-            sleep 2
-          done
-          docker logs venguard-pihole-test
-          exit 1
-      - name: Test echte Pi-hole sessies, Gravity en directe uitzonderingen
-        env:
-          VENGUARD_PIHOLE_DISPOSABLE: '1'
-          VENGUARD_PIHOLE_URL: http://127.0.0.1:18080
-          VENGUARD_PIHOLE_PASSWORD: ci-only-pihole-password
-        run: python3 -m unittest discover -s tests -p test_native_pihole.py -v
       - name: Start twee schone officiële AdGuard Home-servers
         run: |
           docker run -d --name venguard-agh-one -p 127.0.0.1:19081:3000 adguard/adguardhome:v0.107.79
@@ -101,6 +86,21 @@ jobs:
               time.sleep(1)
           else:raise SystemExit('Scanneragent meldt zich niet bij VenGuard')
           PY
+      - name: Start officiële Pi-hole v6 voor integratietest
+        run: |
+          docker run -d --name venguard-pihole-test --add-host=host.docker.internal:host-gateway -p 127.0.0.1:18080:80 -e FTLCONF_webserver_api_password=ci-only-pihole-password -e FTLCONF_dns_listeningMode=ALL pihole/pihole:2026.10.0
+          for attempt in $(seq 1 90); do
+            if curl --fail --silent http://127.0.0.1:18080/api/info/login >/dev/null; then exit 0; fi
+            sleep 2
+          done
+          docker logs venguard-pihole-test
+          exit 1
+      - name: Test echte Pi-hole sessies, Gravity en directe uitzonderingen
+        env:
+          VENGUARD_PIHOLE_DISPOSABLE: '1'
+          VENGUARD_PIHOLE_URL: http://127.0.0.1:18080
+          VENGUARD_PIHOLE_PASSWORD: ci-only-pihole-password
+        run: python3 -m unittest discover -s tests -p test_native_pihole.py -v
       - name: Opruimen
         if: always()
         run: |

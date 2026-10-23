@@ -33,7 +33,9 @@ class NativePiHoleTest(unittest.TestCase):
                     result=store.publish_all()
                     if result['ok'] or time.monotonic()>deadline:break
                     time.sleep(2)
-                self.assertTrue(result['ok'],result)
+                if not result['ok']:
+                    details=[{k:r.get(k) for k in ('type','enabled','status','date_updated','number','abp_entries')} for r in store.pihole.call(store.primary(),'lists').get('lists',[])]
+                    self.fail(str(result)+'; subscription metadata: '+str(details))
                 lists=store.pihole.call(store.primary(),'lists').get('lists',[]);self.assertEqual(len(lists),2);self.assertEqual({r['type'] for r in lists},{'allow','block'})
                 # Real Gravity must parse each dedicated ABP subscription, including its suffix semantics.
                 self.assertTrue(all((r.get('number',0)+r.get('abp_entries',0))>0 for r in lists),lists)

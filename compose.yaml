@@ -35,6 +35,8 @@ services:
     restart: unless-stopped
     init: true
     network_mode: host
+    group_add:
+      - "10001"
     environment:
       VENGUARD_AGENT_URL: http://127.0.0.1:${VENGUARD_PORT:-8098}
     volumes:
