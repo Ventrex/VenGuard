@@ -14,6 +14,7 @@ BEGIN='! VenGuard managed rules begin'
 END='! VenGuard managed rules end'
 
 def native_rules(current,wanted):
+    current=current or []
     output=[];inside=False
     # Never erase ambiguous user content if a marker was accidentally edited.
     if current.count(BEGIN)!=current.count(END) or current.count(BEGIN)>1:raise ValueError('Het beheerde regelblok is gewijzigd. Herstel de VenGuard-markeringen in de eigen serverregels.')

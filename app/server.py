@@ -146,7 +146,15 @@ class Store(HubMixin,AccountMixin,OperationsMixin,SecurityMixin,ConnectivityMixi
                 if body is not None or method in ('POST','PUT','DELETE'):return {}
                 raise ValueError('AdGuard gaf geen JSON terug; controleer de beheer-URL en poort.')
             if (body is not None or method in ('POST','PUT','DELETE')) and raw.strip() in (b'OK',b'Ok',b'ok'): return {}
-            try: return json.loads(raw)
+            try:
+                value=json.loads(raw)
+                # Fresh AdGuard instances serialize empty collections as null.
+                if path=='filtering/status' and isinstance(value,dict):
+                    for key in ('filters','whitelist_filters','user_rules'):
+                        if value.get(key) is None:value[key]=[]
+                if path=='clients' and isinstance(value,dict) and value.get('clients') is None:value['clients']=[]
+                if path=='rewrite/list' and value is None:value=[]
+                return value
             except json.JSONDecodeError: raise ValueError('AdGuard gaf geen JSON terug; controleer de beheer-URL en poort.')
     def feed_url(self,filename="filter.txt"):
         with self.lock: base=self.config['public_url']
@@ -416,7 +424,7 @@ class Handler(BaseHTTPRequestHandler):
                     port=int(data.get('dns_port',53))
                     if not 1<=port<=65535:raise ValueError('Ongeldige DNS-poort.')
                     enabled=bool(data.get('enabled',True))
-                    if current['id']==s.config['primary_id'] and not enabled:raise ValueError('Kies eerst een andere bronserver voordat je deze uitschakelt.')
+                    if current['id']==s.config['primary_id'] and not enabled and not s.desired['captured']:raise ValueError('Kies eerst een andere bronserver voordat je deze uitschakelt.')
                     current.update(type=server_type,name=str(data.get('name') or ('Pi-hole' if server_type=='pihole' else 'AdGuard'))[:100],url=url,username=str(data.get('username',''))[:200],dns_host=dns_host,dns_port=port,enabled=enabled)
                     if previous_type!=server_type and not data.get('password'):current['password']=''
                     if data.get('password'):current['password']=str(data['password'])

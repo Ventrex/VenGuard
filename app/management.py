@@ -7,13 +7,26 @@ from hub import SECTIONS,digest,error_text,now_iso,write_private
 from operations import native_rules
 from providers import kind
 
+def profile_matches(wanted,actual):
+    """AdGuard fills optional defaults; compare the fields VenGuard actually owns."""
+    if isinstance(wanted,dict):return isinstance(actual,dict) and all(k in actual and profile_matches(v,actual[k]) for k,v in wanted.items())
+    if isinstance(wanted,list):
+        if not isinstance(actual,list) or len(wanted)!=len(actual):return False
+        remaining=list(actual)
+        for item in wanted:
+            index=next((i for i,value in enumerate(remaining) if profile_matches(item,value)),None)
+            if index is None:return False
+            remaining.pop(index)
+        return True
+    return wanted==actual
+
 class ManagementMixin:
     def init_management(self):
         self.desired={'captured':False,'sections':{},'controls':{'protection':True,'filtering':True},'native_filters':[],'revision':0,'updated_at':None}
         path=self.dir/'desired-settings.json'
         if path.exists():self.desired.update(json.loads(path.read_text()))
         self.management_results={};self.management_event=threading.Event();self.management_lock=threading.Lock();self.management_last=0
-        self.management_error='';self.management_running=False
+        self.management_error='';self.management_running=False;self.management_refresh=False
     def save_desired(self):
         self.desired['revision']+=1;self.desired['updated_at']=now_iso()
         write_private(self.dir/'desired-settings.json',self.desired);self.management_event.set()
@@ -88,7 +101,9 @@ class ManagementMixin:
         return self.desired_write(section,values,current['etag'])
     def desired_filter_action(self,data):
         action=data.get('action')
-        if action=='refresh':self.request_build(fetch=True);self.management_event.set();return {'ok':True}
+        if action=='refresh':
+            with self.lock:self.management_refresh=True;self.management_event.set()
+            self.request_build(fetch=True);return {'ok':True}
         with self.lock:
             item=next((f for f in self.desired['native_filters'] if f['url']==data.get('url') and f['whitelist']==bool(data.get('whitelist'))),None)
             if not item:raise ValueError('Deze centrale serverlijst is niet gevonden.')
@@ -105,7 +120,7 @@ class ManagementMixin:
         if not self.cluster_lock.acquire(blocking=False):self.management_lock.release();return {'ok':False,'queued':True}
         self.management_running=True
         try:
-            with self.lock:desired=copy.deepcopy(self.desired);servers=[s for s in self.servers() if s.get('enabled',True)]
+            with self.lock:desired=copy.deepcopy(self.desired);servers=[s for s in self.servers() if s.get('enabled',True)];refresh=self.management_refresh;self.management_refresh=False;feed_revision=self.revision
             def apply(server):
                 sid=server['id'];changed=[]
                 try:
@@ -124,15 +139,15 @@ class ManagementMixin:
                                 if inside:managed.append(line)
                             wanted=native_rules(wanted,managed)
                         comparison={k:current.get(k) for k in wanted} if isinstance(wanted,dict) else current
-                        if digest(comparison)==digest(wanted):continue
+                        if (profile_matches(wanted,current) if section in ('clients','rewrites') else digest(comparison)==digest(wanted)):continue
                         if section in ('clients','rewrites'):
                             key='name' if section=='clients' else 'domain';endpoint='clients' if section=='clients' else 'rewrite'
                             for old in current:
                                 target=next((v for v in wanted if v.get(key)==old.get(key) and (section!='rewrites' or v.get('answer')==old.get('answer'))),None)
-                                if target==old:continue
+                                if target is not None and profile_matches(target,old):continue
                                 self.agh(endpoint+'/delete',{'name':old['name']} if section=='clients' else {'domain':old['domain'],'answer':old['answer']},settings=server)
                             for item in wanted:
-                                if item not in current:self.agh(endpoint+'/add',item,settings=server)
+                                if not any(profile_matches(item,old) for old in current):self.agh(endpoint+'/add',item,settings=server)
                         else:
                             spec=SECTIONS[section]
                             if spec.get('toggle'):self.agh(spec['toggle']+('/enable' if wanted['enabled'] else '/disable'),{},settings=server)
@@ -141,7 +156,7 @@ class ManagementMixin:
                         actual=self.central_read(section,sid)['value']
                         if isinstance(wanted,dict):
                             if any(actual.get(k)!=v for k,v in wanted.items()):raise ValueError(section+': instellingen nog niet bevestigd.')
-                        elif digest(actual)!=digest(wanted):raise ValueError(section+': instellingen nog niet bevestigd.')
+                        elif not (profile_matches(wanted,actual) if section in ('clients','rewrites') else digest(actual)==digest(wanted)):raise ValueError(section+': instellingen nog niet bevestigd.')
                         changed.append(section)
                     filtering=self.agh('filtering/status',settings=server)
                     for white,key in ((False,'filters'),(True,'whitelist_filters')):
@@ -166,7 +181,11 @@ class ManagementMixin:
                         if self.agh(endpoint,settings=server).get(key) is not enabled:raise ValueError('Beschermingsstand nog niet bevestigd.')
                     if self.config.get('public_url'):
                         self.ensure_feed(server,self.feed_url(),False)
-                        if self.management_results.get(sid,{}).get('revision')!=desired['revision']:self.agh('filtering/refresh',{'whitelist':False},settings=server)
+                        feed=self.feed_results.get(sid,{})
+                        if refresh or self.management_results.get(sid,{}).get('revision')!=desired['revision'] or (self.config.get('auto_sync') and (not feed.get('ok') or feed.get('revision')!=feed_revision)):
+                            self.agh('filtering/refresh',{'whitelist':False},settings=server)
+                            self.agh('filtering/refresh',{'whitelist':True},settings=server)
+                            with self.lock:self.feed_results[sid]={'ok':True,'at':now_iso(),'revision':feed_revision,'error':''}
                     self.record_event('Centraal profiel',sid,'success','Profiel bevestigd; gewijzigd: '+(', '.join(changed) or 'geen instellingen')+'.')
                     return sid,{'ok':True,'revision':desired['revision'],'at':now_iso(),'message':'Centraal profiel bevestigd.' if self.config.get('public_url') else 'Instellingen bevestigd; stel het VenGuard LAN-adres in om ook de lijst aan te bieden.'}
                 except Exception as error:

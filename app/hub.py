@@ -384,7 +384,7 @@ class HubMixin:
         server=self.selected(sid)
         if kind(server)!='adguard':raise ValueError('Deze geavanceerde editor is voor AdGuard Home. Gebruik voor Pi-hole de gedeelde lijsten en domeinregels of Eigen beheer.')
         value=self.agh(spec['get'],settings=server)
-        if spec.get('key'):value=value.get(spec['key'],[])
+        if spec.get('key'):value=value.get(spec['key']) or []
         if spec.get('keys'):value={k:v for k,v in value.items() if k in spec['keys']}
         return {'section':section,'name':spec['name'],'value':value,'etag':digest(value),'server_id':server['id']}
     def central_write(self,section,value,etag):

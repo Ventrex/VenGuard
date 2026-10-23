@@ -76,11 +76,14 @@ class PiHole:
         before=self.call(server,'lists').get('lists',[])
         if verify_urls is not None and set(verify_urls)-{r['address'] for r in before if r.get('enabled')}:raise ValueError('Pi-hole bevestigt niet alle VenGuard-abonnementen; probeer de koppeling opnieuw.')
         expected={(r['address'],r.get('type','block')) for r in before if r.get('enabled') and (verify_urls is None or r['address'] in verify_urls)}
-        result=self.call(server,'action/gravity',{},stream=True)
+        started=time.monotonic();result=self.call(server,'action/gravity',{},stream=True)
+        # Downloads can finish before a slow Gravity round ends. Anchor freshness
+        # to the start of this request in Pi-hole's own clock, not its finish.
+        requested_at=result['server_time']-(time.monotonic()-started)
         after={(r['address'],r.get('type','block')):r for r in self.call(server,'lists').get('lists',[])}
         for key in expected:
             item=after.get(key,{})
-            if not item.get('enabled') or item.get('status') not in (1,2) or item.get('date_updated',0)<result['server_time']-2:
+            if not item.get('enabled') or item.get('status') not in (1,2) or item.get('date_updated',0)<requested_at-2:
                 raise ValueError('Pi-hole bevestigt nog geen actuele succesvolle download voor alle gekozen lijsten. Mogelijk loopt Gravity nog of is een bron niet bereikbaar; de volgende ronde probeert opnieuw.')
         return {'ok':True,'verified':len(expected)}
     def adapter(self,server,path,body=None,query=None,method=None):

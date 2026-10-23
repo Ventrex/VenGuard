@@ -53,6 +53,16 @@ class ManagementTests(unittest.TestCase):
     def test_noop_periodic_apply_never_rewrites_dns(self):
         self.save('dns',{'upstream_dns':['9.9.9.9']});self.s.apply_management();self.s.calls=[];self.s.apply_management()
         self.assertFalse(any(p=='dns_config' for _,p,_ in self.s.calls))
+    def test_server_defaults_do_not_recreate_clients_or_rewrites(self):
+        self.save('clients',[{'name':'Lamp','ids':['192.168.0.50']}]);self.save('rewrites',[{'domain':'nas.home.arpa','answer':'192.168.0.51'}])
+        for remote in self.s.remote.values():
+            remote['clients']=[{'name':'Lamp','ids':['192.168.0.50'],'use_global_settings':True,'filtering_enabled':True}]
+            remote['rewrites']=[{'domain':'nas.home.arpa','answer':'192.168.0.51','enabled':True}]
+        self.assertTrue(self.s.apply_management()['ok'])
+        self.assertFalse(any(p.endswith(('/add','/delete')) for _,p,_ in self.s.calls))
+    def test_clean_server_null_collections_are_imported(self):
+        self.s.remote['one']['rules']=None;self.s.remote['one']['clients']=None
+        self.s.adopt_server('one');self.assertEqual(self.s.desired['sections']['rules'],[]);self.assertEqual(self.s.desired['sections']['clients'],[])
     def test_profile_can_be_configured_before_servers_exist(self):
         self.s.config['servers']=[];self.s.config['adguard']['url']=''
         self.save('dns',{'upstream_dns':['1.1.1.1']});self.assertTrue(self.s.desired_controls('protection',False)['ok'])

@@ -32,6 +32,7 @@ class CleanAdGuardTests(unittest.TestCase):
             dns=store.desired_read('dns');dns['value']['upstream_dns']=['1.1.1.1'];dns['value']['bootstrap_dns']=['9.9.9.9']
             store.desired_write('dns',dns['value'],dns['etag'])
             rewrite=store.desired_read('rewrites');store.desired_write('rewrites',[{'domain':'venguard-test.home.arpa','answer':'192.0.2.50','enabled':True}],rewrite['etag'])
+            clients=store.desired_read('clients');store.desired_write('clients',[{'name':'VenGuard test client','ids':['192.0.2.83'],'use_global_settings':True,'filtering_enabled':True}],clients['etag'])
             # Take the configured origin out of the management path; the clean replica must still apply.
             store.config['servers'][0]['url']='http://127.0.0.1:1'
             result=store.apply_management()
