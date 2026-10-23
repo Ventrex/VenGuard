@@ -25,6 +25,7 @@ jobs:
           node --check app/static/account.js
           node --check app/static/filters.js
           node --check app/static/security.js
+          node --check app/static/simple.js
           bash -n start.sh update.sh
       - name: Bouw productie-image
         run: docker build -t venguard:test .

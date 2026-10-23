@@ -15,9 +15,14 @@ class DemoHandler(Handler):
 
 class DemoStore(Store):
     protection=True;filtering=True
-    def monitor(self):
+    def monitor(self,include_dns=True):
         import time
         for h in self.health.values():h.update(checked_at=utc(),checked_epoch=time.time(),controls_checked_at=utc(),controls_epoch=time.time(),protection_enabled=self.protection,filtering_enabled=self.filtering)
+    def check_connectivity(self):
+        import time
+        for h in self.health.values():h['dns'].update(checked_at=utc(),checked_epoch=time.time())
+        self.connectivity.update(checked_at=utc(),checked_epoch=time.time(),external={'ok':True,'targets':[{'name':'Voorbeeldtest','host':'192.0.2.1','port':443,'ok':True,'ms':8}]})
+        return True
     def agh(self,path,body=None,query=None,settings=None,method=None):
         if path=='protection':self.protection=body['enabled'];return {}
         if path=='filtering/config':self.filtering=body['enabled'];return {}
@@ -44,7 +49,8 @@ if __name__=='__main__':
     store.config['auto_sync']=False
     store.config['sources'][0]['name']='DEMO — HaGeZi Light (testselectie)'
     store.caches={'hagezi-light':{'rules':['||ads.example.net^','||metrics.example.net^'],'counts':{},'fetched':utc()}}
-    store.monitor();store.rebuild(False);store.poll()
+    store.monitor();store.check_connectivity();store.rebuild(False);store.poll()
+    store.connectivity['incidents']=[{'key':'two:dns','started_at':utc(),'started_epoch':time.time(),'ended_at':None,'message':'DEMO — DNS-antwoord ontbreekt vanaf de monitor.','nearby_actions':[]}]
     server=ThreadingHTTPServer(('0.0.0.0',4173),DemoHandler);server.store=store
     print('DISPOSABLE UI DEMO at http://localhost:4173 — no production data',flush=True)
     server.serve_forever()

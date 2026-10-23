@@ -22,7 +22,25 @@ bash update.sh
 
 Het datavolume, account, serverkoppelingen en eigen regels blijven behouden. Eerdere keuzepakketten worden eenmalig overgenomen als gewone domeinregels. Eerdere brede bereikbaarheidspresets worden als **uitgeschakelde** regels bewaard: controleer zo nodig het werkelijk benodigde subdomein. Nieuwe installaties bevatten geen voorgedefinieerde website-uitzonderingen of uitgeverspakketten.
 
-Versie **1.3.1** voegt een beveiligingsoverzicht, eigen toegangsbegrenzing en een alleen-lezen Wazuh-koppeling toe. Netwerkblokkering en verkeerssensoren vereisen nog een aparte koppeling; zie Beveiliging en Wazuh hieronder.
+Versie **1.4.0** vereenvoudigt het dashboard en voegt onafhankelijke verbindingsmetingen met een storingshistorie toe.
+
+## Eenvoudig overzicht en storingen (1.4)
+
+Het hoofdmenu bevat **Overzicht**, **DNS-verzoeken**, **Filters**, **Eigen keuzes** en **Status & storingen**. Account, beveiliging, lijstpublicatie en geavanceerde DNS-editors staan onder **Instellingen & extra’s**. Bestaande adressen zoals `#central` blijven werken. Dark mode blijft standaard.
+
+Bij **Status & storingen** zie je per server DNS, beheer en filtering. Technische gegevens en synchronisatie-instellingen zijn uitklapbaar. De actuele beschermingsstand wordt bij een mislukte beheerverbinding als onbekend weergegeven, niet als een bevestigde actuele instelling.
+
+- **Iedere 15 seconden, onafhankelijk van het beheer:** een echte UDP-DNS-aanvraag voor `example.org` aan elk ingesteld DNS-IP. Na een mislukking wordt eenmaal opnieuw geprobeerd en aanvullend DNS over TCP getest. SERVFAIL, REFUSED, NXDOMAIN, lege antwoorden en blokkeeradressen worden onderscheiden van een ontbrekend antwoord. Een NXDOMAIN bewijst wel een reagerende server, maar geen geslaagde omzetting van de testnaam.
+- **Externe verbinding:** TCP naar `1.1.1.1:443` en `8.8.8.8:443`, zonder DNS te gebruiken. Eén geslaagde verbinding toont bereikbaarheid van die bestemming; mislukking van beide tests bewijst geen providerstoring. Deze tests wijzigen geen upstreams en sturen geen gebruikersverkeer om.
+- **Beheer:** de bestaande controle blijft iedere ronde de API en filterstand controleren. Een trage API of het ophalen van verzoekenlogs houdt de aparte DNS-metingen niet op. “Nu controleren” start controles op de achtergrond en antwoordt meteen, zodat een reverse-proxy-timeout niet als DNS-uitval wordt gepresenteerd.
+- **Bewijs bewaren:** maximaal 200 incidenten met begin, laatst waargenomen fout en herstel, plus maximaal 24 uur meetpunten (hoogstens één per minuut). Het scherm toont de laatste 12 incidenten. **Download rapport** bevat alle bewaarde incidenten, meetpunten, servernamen/IP’s en recente VenGuard-beheeracties, zonder serverwachtwoorden, gebruikersnamen, lijsttokens of DNS-verzoekenlog.
+- **Correlatie:** beheeracties vlak voor een storing zijn zichtbaar. Een overeenkomstig tijdstip is geen bewezen oorzaak. Bij herstart van VenGuard wordt een open incident afgesloten met *meting beëindigd*, zonder een verzonnen hersteltijd of uitvalduur voor de niet-gemeten periode.
+- **Filterdiagnose per server:** open de meetdetails en kies **Filterinstellingen controleren** om globale schakelaars, actieve lijsten en apparaten met eigen filtering uit te lezen.
+- **Browserverbinding:** fouten tussen je browser en VenGuard/reverse proxy verschijnen apart bovenaan. Een verdwenen dashboardverbinding wordt niet automatisch uitgelegd als een defecte DNS-server.
+
+Alle metingen worden uitgevoerd **vanuit de VenGuard-container**. Ze bewijzen niet dat een telefoon dezelfde DNS gebruikt, dat wifi werkt of dat alle upstreams bereikbaar zijn. `example.org` kan uit de DNS-cache komen. VenGuard kan geen eerdere storing reconstrueren en leest zonder aanvullende koppeling geen Docker-, host-, switch- of routerlogs uit. De oorzaak van een hostherstart, geheugenprobleem, defecte kabel of upstreamstoring vereist nog die logs. Duur en hersteltijden zijn benaderingen op basis van de meetmomenten; korte storingen tussen de controles kunnen worden gemist.
+
+Bewaar een rapport na een storing om DNS-uitval, alleen een beheerfout, een extern verbindingsprobleem en uitgeschakelde filtering te onderscheiden. Verbindingsmetingen staan in `/data/connectivity.json` en blijven bij een gewone update behouden.
 
 ## Wat versie 1.3 verandert
 
@@ -37,7 +55,7 @@ Een tijdelijke beheer-API-fout bewijst niet dat DNS uitligt. De twee controles s
 
 ## Servers toevoegen
 
-1. Open **Servers & Sync → Server toevoegen**.
+1. Open **Status & storingen → Server toevoegen**.
 2. Kies **AdGuard Home** of **Pi-hole v6**.
 3. Geef het beheeradres op. Voorbeelden: `http://192.168.0.10:3000` of `http://192.168.0.20`. Gebruik de werkelijke webpoort, niet de DNS-poort.
 4. AdGuard: vul gebruikersnaam en wachtwoord in. Pi-hole: vul het wachtwoord of app-wachtwoord in; gebruikersnaam is niet nodig. Bij Pi-hole-2FA gebruik je een **app-wachtwoord**. VenGuard bewaart en hergebruikt één API-sessie per server.
@@ -94,7 +112,7 @@ DNS kan advertenties van aparte advertentiedomeinen blokkeren. Het kan een gespo
 | Apparaat-IP-regels | Ja | Niet vertaald; gebruik Pi-hole-groepen |
 | Geavanceerde instellingen kopiëren | AdGuard → AdGuard | Geen vertaling van AdGuard-instellingen |
 
-De ongewijzigde **AdGuardHome Sync v0.9.4** is in de Docker-container opgenomen. Kies de onderdelen bij Servers & Sync. De bron blijft leidend; replica’s worden niet automatisch gepromoveerd. Pi-hole wordt nooit als AdGuard-replica aan deze engine doorgegeven. Met een Pi-hole-bron worden alleen de gedeelde VenGuard-functies gebruikt. Stop een eventueel nog los draaiende AdGuard Sync zodra je deze ingebouwde sync gebruikt.
+De ongewijzigde **AdGuardHome Sync v0.9.4** is in de Docker-container opgenomen. Kies de onderdelen bij Status & storingen. De bron blijft leidend; replica’s worden niet automatisch gepromoveerd. Pi-hole wordt nooit als AdGuard-replica aan deze engine doorgegeven. Met een Pi-hole-bron worden alleen de gedeelde VenGuard-functies gebruikt. Stop een eventueel nog los draaiende AdGuard Sync zodra je deze ingebouwde sync gebruikt.
 
 DHCP, luisterinterfaces/poorten, TLS-certificaten en AdGuard-gebruikers worden niet gekloond. Voor zover bereikbaar worden vóór geavanceerde wijzigingen lokale snapshots bewaard in `/data/settings-backups`, maximaal 20; er is geen automatische rollback. Een gedeeltelijk mislukte actie blijft zichtbaar. Recente acties bevatten geen wachtwoorden of ruwe serverlogs.
 

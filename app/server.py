@@ -81,7 +81,9 @@ DEFAULT={
  'rules':[], 'adguard':{'url':'','username':'','password':''}
 }
 
-class Store(HubMixin,AccountMixin,OperationsMixin,SecurityMixin):
+from connectivity import ConnectivityMixin
+
+class Store(HubMixin,AccountMixin,OperationsMixin,SecurityMixin,ConnectivityMixin):
     def __init__(self,directory):
         self.dir=Path(directory); self.dir.mkdir(parents=True,exist_ok=True)
         self.lock=threading.RLock(); self.agh_lock=threading.Lock()
@@ -100,7 +102,7 @@ class Store(HubMixin,AccountMixin,OperationsMixin,SecurityMixin):
         self.report=read_json(self.dir/'report.json',{'count':0,'sources':[],'built':None,'added':0,'removed':0})
         self.origins={}; self.last_log=[]; self.last_poll=0; self.poll_error=''; self.last_refresh=0
         self.revision=0; self.last_synced_revision=-1
-        self.init_hub();self.init_accounts();self.init_operations();self.init_security()
+        self.init_hub();self.init_accounts();self.init_operations();self.init_security();self.init_connectivity()
         self.save()
         if not (self.dir/'filter.txt').exists():
             lines,_,_=compose(self.config,self.caches,self.observed)
@@ -218,7 +220,7 @@ class Store(HubMixin,AccountMixin,OperationsMixin,SecurityMixin):
             config['adguard']['password_set']=bool(config['adguard'].pop('password',''))
             for server in config.get('servers',[]):
                 server['password_set']=bool(server.pop('password',''))
-            return {'config':config,'packs':PACKS,'categories':CATEGORIES,'presets':PRESETS,'report':copy.deepcopy(self.report),'job':dict(self.job),'observed':len(self.observed),'poll_error':self.poll_error,'last_poll':self.last_poll or None,'feed_url':self.feed_url() if config['public_url'] else '', 'feed_path':'/lists/'+self.feed_token+'/filter.txt','version':'1.3.1','hub':self.hub_snapshot()}
+            return {'config':config,'packs':PACKS,'categories':CATEGORIES,'presets':PRESETS,'report':copy.deepcopy(self.report),'job':dict(self.job),'observed':len(self.observed),'poll_error':self.poll_error,'last_poll':self.last_poll or None,'feed_url':self.feed_url() if config['public_url'] else '', 'feed_path':'/lists/'+self.feed_token+'/filter.txt','version':'1.4.0','hub':self.hub_snapshot()}
 
 class Handler(BaseHTTPRequestHandler):
     server_version='VenGuard'
@@ -276,6 +278,8 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith('/api/'):
             if not self.auth(): return self.respond({'error':'Log eerst in.'},401)
             if path=='/api/state': return self.respond(self.store.snapshot())
+            if path=='/api/connectivity':return self.respond(self.store.connectivity_snapshot())
+            if path=='/api/connectivity/export':return self.respond(self.store.connectivity_snapshot(report=True),headers={'Content-Disposition':'attachment; filename="VenGuard-storingsrapport.json"'})
             if path=='/api/security':return self.respond(self.store.security_snapshot())
             if path=='/api/events':return self.respond({'events':copy.deepcopy(self.store.events),'rules':copy.deepcopy(self.store.live_results),'pending':copy.deepcopy(self.store.control_intents)})
             if path=='/api/account': return self.respond(self.store.account_public())
@@ -301,7 +305,8 @@ class Handler(BaseHTTPRequestHandler):
                 d=domain(q.get('domain','')); result=self.store.agh('filtering/check_host',query={'name':d,'client':q.get('client',''),'qtype':q.get('type','A')},settings=self.store.selected(q.get('server','')))
                 return self.respond({'domain':d,'adguard':result,'explanation':explain(d),'note':'Dit is een actuele AdGuard-regelcontrole, geen DNS-verzoek vanaf je iPhone.'})
             if path=='/api/diagnostics':
-                return self.respond({'status':self.store.agh('status'),'filtering':self.store.agh('filtering/status'),'clients':self.store.agh('clients') if kind(self.store.primary())=='adguard' else {'clients':[],'unsupported':True}})
+                server=self.store.selected(q.get('server',''))
+                return self.respond({'status':self.store.agh('status',settings=server),'filtering':self.store.agh('filtering/status',settings=server),'clients':self.store.agh('clients',settings=server) if kind(server)=='adguard' else {'clients':[],'unsupported':True}})
             if path=='/api/export':
                 with self.store.lock:
                     config=copy.deepcopy(self.store.config); config['adguard']={'url':config['adguard']['url'],'username':'','password':''}
@@ -316,7 +321,7 @@ class Handler(BaseHTTPRequestHandler):
                 offset=max(0,min(int(q.get('offset',0)),1000000))
                 return self.respond({'lines':filtered[offset:offset+100],'total':len(filtered),'offset':offset})
             return self.respond({'error':'Niet gevonden.'},404)
-        files={'/':'index.html','/app.js':'app.js','/style.css':'style.css','/hub.js':'hub.js','/theme.js':'theme.js','/account.js':'account.js','/filters.js':'filters.js','/security.js':'security.js'}
+        files={'/':'index.html','/app.js':'app.js','/style.css':'style.css','/hub.js':'hub.js','/theme.js':'theme.js','/account.js':'account.js','/filters.js':'filters.js','/security.js':'security.js','/simple.js':'simple.js'}
         if path not in files: return self.respond({'error':'Niet gevonden.'},404)
         file=ROOT/'static'/files[path]
         return self.respond(file.read_bytes(),ctype={'html':'text/html','js':'text/javascript','css':'text/css'}[file.suffix[1:]])
@@ -402,8 +407,10 @@ class Handler(BaseHTTPRequestHandler):
                 s.health.pop(sid,None);s.sync_status['results']={};s.sync_status['state']='queued' if s.config['cluster_sync']['enabled'] else 'idle'
             return self.respond({'ok':True})
         if path=='/api/hub/check':
-            s.monitor()
-            return self.respond({'ok':True,'hub':s.hub_snapshot()})
+            s.request_connectivity()
+            threading.Thread(target=s.monitor,kwargs={'include_dns':False},daemon=True).start()
+            return self.respond({'ok':True,'message':'Nieuwe controle gestart. Resultaten verschijnen automatisch.','hub':s.hub_snapshot()})
+        if path=='/api/connectivity/check':return self.respond(s.request_connectivity())
         if path=='/api/cluster-settings':
             with s.lock:
                 options=copy.deepcopy(s.config['cluster_sync'])
@@ -565,7 +572,7 @@ def main():
         logging.info('Beheerwachtwoord staat in het databestand admin-password. Bekijk dit alleen op je eigen host.')
     server=BoundedHTTPServer(('0.0.0.0',int(os.getenv('VENGUARD_PORT','8098'))),Handler)
     server.store=store; server.daemon_threads=True
-    for target in (store.worker,store.monitor_worker,store.cluster_worker,store.operations_worker,store.security_worker):
+    for target in (store.worker,store.monitor_worker,store.cluster_worker,store.operations_worker,store.security_worker,store.connectivity_worker):
         threading.Thread(target=target,daemon=True).start()
     logging.info('VenGuard gestart op poort %s',server.server_port)
     try: server.serve_forever()

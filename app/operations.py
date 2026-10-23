@@ -59,6 +59,7 @@ class OperationsMixin:
                     if before.get(key) is not enabled:
                         body={'enabled':enabled,'duration':0} if field=='protection' else {'enabled':enabled,'interval':before.get('interval',24)}
                         # Do not repeat a write after a lost response: first read back its result.
+                        self.record_event('Bescherming' if field=='protection' else 'Lijstfiltering',sid,'started','Stand wijzigen naar '+('aan' if enabled else 'uit')+'.')
                         try:self.agh('protection' if field=='protection' else 'filtering/config',body,settings=server)
                         except Exception:
                             confirmed=self.agh(endpoint,settings=server)

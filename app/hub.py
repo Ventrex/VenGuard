@@ -70,24 +70,9 @@ def write_private(path,value):
     os.replace(temp,path)
 
 def dns_probe(host,port=53,timeout=2):
-    """A real UDP DNS probe, independent from the HTTP admin endpoint."""
-    if not host:return {'ok':None,'error':'Geen DNS-IP ingesteld.','ms':None}
-    try:
-        address=ipaddress.ip_address(host)
-        transaction=secrets.randbelow(65536)
-        question=b''.join(bytes([len(p)])+p.encode('ascii') for p in ['example','org'])+b'\x00'+struct.pack('!HH',1,1)
-        packet=struct.pack('!HHHHHH',transaction,0x100,1,0,0,0)+question
-        start=time.monotonic()
-        with socket.socket(socket.AF_INET6 if address.version==6 else socket.AF_INET,socket.SOCK_DGRAM) as sock:
-            sock.settimeout(timeout);sock.connect((host,int(port)));sock.send(packet);response=sock.recv(4096)
-        if len(response)<12:raise ValueError('Te kort DNS-antwoord.')
-        tid,flags,qd,an,ns,ar=struct.unpack('!HHHHHH',response[:12])
-        if tid!=transaction or not flags&0x8000 or qd!=1:raise ValueError('Onverwacht DNS-antwoord.')
-        code=flags&15
-        if code not in (0,3):raise ValueError(f'DNS antwoordt met foutcode {code}.')
-        return {'ok':True,'error':'','rcode':code,'ms':round((time.monotonic()-start)*1000,1)}
-    except Exception as e:
-        return {'ok':False,'error':str(e) if isinstance(e,ValueError) else 'Geen bruikbaar UDP DNS-antwoord binnen de timeout.','ms':None}
+    # Kept as a public seam for existing callers and protocol tests.
+    from connectivity import dns_probe as probe
+    return probe(host,port,timeout)
 
 def native_config(servers,primary_id,options):
     active=[s for s in servers if s.get('enabled',True)]
@@ -173,16 +158,18 @@ class HubMixin:
                 server['password_set']=bool(self.selected(server['id']).get('password'))
                 health=copy.deepcopy(self.health.get(server['id'],{}))
                 health['stale']=not health.get('checked_at') or time.time()-health.get('checked_epoch',0)>90
+                from connectivity import assessment
+                health['assessment']=assessment(health)
                 server['health']=health;server['feed']=copy.deepcopy(self.feed_results.get(server['id'],{}));items.append(server)
             return {'servers':items,'primary_id':self.config.get('primary_id') or (items[0]['id'] if items else ''),
                     'sync':copy.deepcopy(self.sync_status),'features':[{'id':k,'name':v[0]} for k,v in FEATURES.items()],
-                    'checked':self.health_checked,'live_results':copy.deepcopy(getattr(self,'live_results',{})),'pending_controls':copy.deepcopy(getattr(self,'control_intents',{})),'events':copy.deepcopy(getattr(self,'events',[]))[-20:],'binary_available':bool(shutil.which(os.getenv('ADGUARD_SYNC_BINARY','adguardhome-sync')))}
+                    'connectivity':self.connectivity_snapshot(),'checked':self.health_checked,'live_results':copy.deepcopy(getattr(self,'live_results',{})),'pending_controls':copy.deepcopy(getattr(self,'control_intents',{})),'events':copy.deepcopy(getattr(self,'events',[]))[-20:],'binary_available':bool(shutil.which(os.getenv('ADGUARD_SYNC_BINARY','adguardhome-sync')))}
     def read_controls(self):
         origin=self.primary();status=self.agh('status',settings=origin);filtering=self.agh('filtering/status',settings=origin)
         result={'protection_enabled':status.get('protection_enabled'),'filtering_enabled':filtering.get('enabled'),'controls_checked_at':now_iso(),'controls_epoch':time.time()}
         with self.lock:self.health.setdefault(origin['id'],{}).update(result)
         return result
-    def monitor(self):
+    def monitor(self,include_dns=True):
         if not self.monitor_lock.acquire(blocking=False):return
         try:
             items=[s for s in self.servers() if s.get('enabled',True)]
@@ -199,11 +186,20 @@ class HubMixin:
                         if isinstance(e,(urllib.error.HTTPError,ValueError)):break
                 if health['api_ok']:
                     try:
-                        health['filtering_enabled']=self.agh('filtering/status',settings=s).get('enabled');health['controls_checked_at']=now_iso();health['controls_epoch']=time.time()
+                        filtering=self.agh('filtering/status',settings=s)
+                        health['filtering_enabled']=filtering.get('enabled');health['controls_checked_at']=now_iso();health['controls_epoch']=time.time()
+                        health['active_filters']=sum(bool(f.get('enabled')) for f in filtering.get('filters',[]))
+                        health['native_rules']=len(filtering.get('user_rules',[]))
+                        health['venguard_feed']=any(f.get('enabled') and f.get('url')==self.feed_url() for f in filtering.get('filters',[])) if self.config.get('public_url') else None
                     except Exception as e:health['filtering_error']=error_text(e)
-                health['dns']=dns_probe(s.get('dns_host',''),s.get('dns_port',53))
-                if health['dns']['ok'] is False:health['dns']=dns_probe(s.get('dns_host',''),s.get('dns_port',53))
+                if include_dns:
+                    health['dns']=dns_probe(s.get('dns_host',''),s.get('dns_port',53))
+                    if health['dns']['ok'] is False:health['dns']=dns_probe(s.get('dns_host',''),s.get('dns_port',53))
+                    health['dns'].update(checked_at=now_iso(),checked_epoch=time.time())
+                else:
+                    with self.lock:health['dns']=copy.deepcopy(self.health.get(s['id'],{}).get('dns',{'ok':None}))
                 failed=not health['api_ok'] or health['dns']['ok'] is False
+                health['checked_at']=now_iso();health['checked_epoch']=time.time()
                 health['failures']=previous.get('failures',0)+1 if failed else 0
                 health['state']='down' if failed and health['failures']>=3 else 'checking' if failed else 'up'
                 return s['id'],health
@@ -216,13 +212,15 @@ class HubMixin:
                     current=self.health.get(sid,{})
                     if current.get('controls_epoch',0)>h.get('controls_epoch',0):
                         for key in ('protection_enabled','filtering_enabled','controls_checked_at','controls_epoch'):h[key]=current.get(key)
+                    if current.get('dns',{}).get('checked_epoch',0)>h.get('dns',{}).get('checked_epoch',0):h['dns']=current['dns']
                     self.health[sid]=h
+                    self.track_connection(sid+':api',h['api_ok'],h.get('error',''),h['checked_at'],h['checked_epoch'])
                 self.health_checked=now_iso()
         finally:self.monitor_lock.release()
     def monitor_worker(self):
         # This loop is independent from source downloads and synchronization jobs.
         while not self.stop.is_set():
-            try:self.monitor();self.poll()
+            try:self.monitor(include_dns=False);self.poll()
             except Exception as e:
                 with self.lock:self.poll_error=error_text(e)
             self.stop.wait(30)
@@ -308,6 +306,7 @@ class HubMixin:
             with self.lock:
                 options=copy.deepcopy(self.config['cluster_sync']);pid=self.config.get('primary_id') or self.primary()['id']
                 self.sync_status.update(state='running',running=True,last_attempt=now_iso(),error='')
+            self.record_event('Synchronisatie',pid,'started','Instellingen vergelijken en gekozen onderdelen synchroniseren.')
             if not options['enabled']:raise ValueError('Schakel centrale synchronisatie eerst in.')
             all_items=self.servers();items=[s for s in all_items if kind(s)=='adguard']
             active=[s for s in items if s.get('enabled',True)]
@@ -357,6 +356,7 @@ class HubMixin:
                 self.process=None;self.sync_status['running']=False;self.last_cluster_attempt=time.time()
                 write_private(self.dir/'cluster-status.json',self.sync_status)
             config_path.unlink(missing_ok=True);self.cluster_lock.release()
+            self.record_event('Synchronisatie',self.config.get('primary_id',''),'success' if self.sync_status['state']=='success' else 'error','Ronde afgerond: '+self.sync_status['state']+'. DNS-configuratie '+('meegenomen op uitdrukkelijk verzoek.' if allow_dns else 'niet meegenomen.'))
         return {'ok':self.sync_status['state']=='success','message':'Synchronisatieronde afgerond.','status':copy.deepcopy(self.sync_status)}
     def cluster_worker(self):
         while not self.stop.is_set():
