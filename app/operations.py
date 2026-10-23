@@ -131,7 +131,7 @@ class OperationsMixin:
             changed=False
             for rule in self.config['rules']:
                 if rule.get('enabled') and rule.get('expires_at') and rule['expires_at']<=time.time():rule['enabled']=False;changed=True
-            if changed:self.changed();self.rules_pending=True
+            if changed:self.changed();self.rules_pending=True;self.live_results={}
         return changed
 
     def operations_worker(self):

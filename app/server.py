@@ -26,6 +26,7 @@ from accounts import AccountMixin
 from providers import PiHole,kind
 from operations import OperationsMixin
 from migrations import migrate
+from security import SecurityMixin,BoundedHTTPServer
 from hub import HubMixin, SECTIONS, FEATURES, HUB_DEFAULT, write_private, error_text
 
 ROOT=Path(__file__).parent
@@ -80,7 +81,7 @@ DEFAULT={
  'rules':[], 'adguard':{'url':'','username':'','password':''}
 }
 
-class Store(HubMixin,AccountMixin,OperationsMixin):
+class Store(HubMixin,AccountMixin,OperationsMixin,SecurityMixin):
     def __init__(self,directory):
         self.dir=Path(directory); self.dir.mkdir(parents=True,exist_ok=True)
         self.lock=threading.RLock(); self.agh_lock=threading.Lock()
@@ -99,7 +100,7 @@ class Store(HubMixin,AccountMixin,OperationsMixin):
         self.report=read_json(self.dir/'report.json',{'count':0,'sources':[],'built':None,'added':0,'removed':0})
         self.origins={}; self.last_log=[]; self.last_poll=0; self.poll_error=''; self.last_refresh=0
         self.revision=0; self.last_synced_revision=-1
-        self.init_hub();self.init_accounts();self.init_operations()
+        self.init_hub();self.init_accounts();self.init_operations();self.init_security()
         self.save()
         if not (self.dir/'filter.txt').exists():
             lines,_,_=compose(self.config,self.caches,self.observed)
@@ -217,7 +218,7 @@ class Store(HubMixin,AccountMixin,OperationsMixin):
             config['adguard']['password_set']=bool(config['adguard'].pop('password',''))
             for server in config.get('servers',[]):
                 server['password_set']=bool(server.pop('password',''))
-            return {'config':config,'packs':PACKS,'categories':CATEGORIES,'presets':PRESETS,'report':copy.deepcopy(self.report),'job':dict(self.job),'observed':len(self.observed),'poll_error':self.poll_error,'last_poll':self.last_poll or None,'feed_url':self.feed_url() if config['public_url'] else '', 'feed_path':'/lists/'+self.feed_token+'/filter.txt','version':'1.3.0','hub':self.hub_snapshot()}
+            return {'config':config,'packs':PACKS,'categories':CATEGORIES,'presets':PRESETS,'report':copy.deepcopy(self.report),'job':dict(self.job),'observed':len(self.observed),'poll_error':self.poll_error,'last_poll':self.last_poll or None,'feed_url':self.feed_url() if config['public_url'] else '', 'feed_path':'/lists/'+self.feed_token+'/filter.txt','version':'1.3.1','hub':self.hub_snapshot()}
 
 class Handler(BaseHTTPRequestHandler):
     server_version='VenGuard'
@@ -259,6 +260,9 @@ class Handler(BaseHTTPRequestHandler):
     def get(self):
         parsed=urllib.parse.urlsplit(self.path); path=parsed.path
         q={k:v[0] for k,v in urllib.parse.parse_qs(parsed.query).items()}
+        if path.startswith('/api/'):
+            ip=self.store.security_ip(self.client_address[0],self.headers.get('X-Forwarded-For',''))
+            if not self.store.request_allowed(ip):return self.respond({'error':'Te veel beheeropdrachten; probeer over een minuut opnieuw.'},429,headers={'Retry-After':'60'})
         if path=='/health': return self.respond({'ok':True})
         if path.startswith('/lists/'):
             filename=path.rsplit('/',1)[-1];expected='/lists/'+self.store.feed_token+'/'+filename
@@ -272,6 +276,7 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith('/api/'):
             if not self.auth(): return self.respond({'error':'Log eerst in.'},401)
             if path=='/api/state': return self.respond(self.store.snapshot())
+            if path=='/api/security':return self.respond(self.store.security_snapshot())
             if path=='/api/events':return self.respond({'events':copy.deepcopy(self.store.events),'rules':copy.deepcopy(self.store.live_results),'pending':copy.deepcopy(self.store.control_intents)})
             if path=='/api/account': return self.respond(self.store.account_public())
             if path=='/api/central-controls': return self.respond(self.store.read_controls())
@@ -289,7 +294,7 @@ class Handler(BaseHTTPRequestHandler):
                     if q.get('server') and row.get('server_id')!=q['server']: continue
                     annotation=explain(d)
                     with self.store.lock:
-                        custom=[r for r in self.store.config['rules'] if d==r['domain'] or d.endswith('.'+r['domain'])]
+                        custom=[r for r in self.store.config['rules'] if d==r['domain'] or (r.get('match','suffix')=='suffix' and d.endswith('.'+r['domain']))]
                     output.append({**row,'classification':annotation,'outcome':category,'custom':custom})
                 return self.respond({'data':output,'count_sample':len(rows),'last_poll':self.store.last_poll,'error':error,'limit':1000,'servers':len(self.store.servers())})
             if path=='/api/check':
@@ -311,7 +316,7 @@ class Handler(BaseHTTPRequestHandler):
                 offset=max(0,min(int(q.get('offset',0)),1000000))
                 return self.respond({'lines':filtered[offset:offset+100],'total':len(filtered),'offset':offset})
             return self.respond({'error':'Niet gevonden.'},404)
-        files={'/':'index.html','/app.js':'app.js','/style.css':'style.css','/hub.js':'hub.js','/theme.js':'theme.js','/account.js':'account.js','/filters.js':'filters.js'}
+        files={'/':'index.html','/app.js':'app.js','/style.css':'style.css','/hub.js':'hub.js','/theme.js':'theme.js','/account.js':'account.js','/filters.js':'filters.js','/security.js':'security.js'}
         if path not in files: return self.respond({'error':'Niet gevonden.'},404)
         file=ROOT/'static'/files[path]
         return self.respond(file.read_bytes(),ctype={'html':'text/html','js':'text/javascript','css':'text/css'}[file.suffix[1:]])
@@ -322,6 +327,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.respond({'error':'Ongeldige herkomst.'},403)
             if self.headers.get('X-VenGuard')!='1': return self.respond({'error':'Ontbrekende aanvraagbeveiliging.'},403)
             path=urllib.parse.urlsplit(self.path).path
+            ip=self.store.security_ip(self.client_address[0],self.headers.get('X-Forwarded-For',''))
+            if not self.store.request_allowed(ip):return self.respond({'error':'Te veel beheeropdrachten; probeer over een minuut opnieuw.'},429,headers={'Retry-After':'60'})
             body=self.body()
             if path.startswith('/api/central'):
                 if not self.store.cluster_lock.acquire(blocking=False):return self.respond({'error':'Synchronisatie is bezig; probeer de wijziging daarna opnieuw.'},409)
@@ -333,17 +340,21 @@ class Handler(BaseHTTPRequestHandler):
     def post(self,path,data):
         s=self.store
         if path=='/api/login':
-            ip=self.client_address[0]; now=time.time()
+            ip=s.security_ip(self.client_address[0],self.headers.get('X-Forwarded-For','')); now=time.time()
             with s.lock:
                 history=[t for t in s.attempts.get(ip,[]) if now-t<300]
                 s.attempts={k:v for k,v in s.attempts.items() if v and now-v[-1]<300}
-                if len(history)>=10: return self.respond({'error':'Te veel pogingen. Wacht vijf minuten.'},429)
+                if len(history)>=10:
+                    return self.respond({'error':'Te veel pogingen. Wacht vijf minuten.'},429,headers={'Retry-After':'300'})
                 if not s.login_owner(data):
-                    s.attempts[ip]=history+[now]; return self.respond({'error':'Onjuiste inloggegevens of 2FA-code. Een code is eenmalig bruikbaar.'},401)
+                    s.attempts[ip]=history+[now];s.security_event('login_failed',ip,'Mislukte aanmelding bij VenGuard.');return self.respond({'error':'Onjuiste inloggegevens of 2FA-code. Een code is eenmalig bruikbaar.'},401)
                 token=secrets.token_urlsafe(32); s.sessions={k:v for k,v in s.sessions.items() if v>now}; s.sessions[token]=now+12*3600; s.attempts.pop(ip,None)
+            s.security_event('login_success',ip,'Geslaagde aanmelding bij VenGuard.')
             secure='; Secure' if self.headers.get('X-Forwarded-Proto')=='https' else ''
             return self.respond({'ok':True},headers={'Set-Cookie':f'vg_session={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=43200'+secure})
         if not self.auth(): return self.respond({'error':'Log eerst in.'},401)
+        if path=='/api/security':return self.respond(s.save_security(data))
+        if path=='/api/security/check':return self.respond(s.poll_wazuh())
         if path=='/api/account':
             cookie=http.cookies.SimpleCookie(self.headers.get('Cookie',''));token=cookie['vg_session'].value
             return self.respond(s.account_action(data,token))
@@ -516,7 +527,7 @@ class Handler(BaseHTTPRequestHandler):
                     if len(retained)>=3000: raise ValueError('Maximaal 3.000 eigen regels.')
                     s.config['rules']=retained
                     s.config['rules'].append({'id':secrets.token_hex(6),'domain':d,'action':action,'client':client,'note':str(data.get('note',''))[:500],'match':match,'expires_at':time.time()+duration if duration else None,'enabled':True,'created':utc()})
-                s.changed();s.rules_pending=True
+                s.changed();s.rules_pending=True;s.live_results={}
             applied=s.apply_live_rules();return self.respond({'ok':True,'applied':applied,'message':applied['message']})
         if path=='/api/build': s.request_build(fetch=bool(data.get('fetch',False))); return self.respond({'ok':True})
         if path=='/api/poll':
@@ -552,9 +563,9 @@ def main():
     store=Store(os.getenv('VENGUARD_DATA','/data'))
     if not os.getenv('VENGUARD_PASSWORD'):
         logging.info('Beheerwachtwoord staat in het databestand admin-password. Bekijk dit alleen op je eigen host.')
-    server=ThreadingHTTPServer(('0.0.0.0',int(os.getenv('VENGUARD_PORT','8098'))),Handler)
+    server=BoundedHTTPServer(('0.0.0.0',int(os.getenv('VENGUARD_PORT','8098'))),Handler)
     server.store=store; server.daemon_threads=True
-    for target in (store.worker,store.monitor_worker,store.cluster_worker,store.operations_worker):
+    for target in (store.worker,store.monitor_worker,store.cluster_worker,store.operations_worker,store.security_worker):
         threading.Thread(target=target,daemon=True).start()
     logging.info('VenGuard gestart op poort %s',server.server_port)
     try: server.serve_forever()

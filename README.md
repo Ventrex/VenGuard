@@ -22,6 +22,8 @@ bash update.sh
 
 Het datavolume, account, serverkoppelingen en eigen regels blijven behouden. Eerdere keuzepakketten worden eenmalig overgenomen als gewone domeinregels. Eerdere brede bereikbaarheidspresets worden als **uitgeschakelde** regels bewaard: controleer zo nodig het werkelijk benodigde subdomein. Nieuwe installaties bevatten geen voorgedefinieerde website-uitzonderingen of uitgeverspakketten.
 
+Versie **1.3.1** voegt een beveiligingsoverzicht, eigen toegangsbegrenzing en een alleen-lezen Wazuh-koppeling toe. Netwerkblokkering en verkeerssensoren vereisen nog een aparte koppeling; zie Beveiliging en Wazuh hieronder.
+
 ## Wat versie 1.3 verandert
 
 - **Bescherming aan/uit is een kleine opdracht:** eerst de werkelijke stand lezen; als die al klopt wordt niets geschreven. Bij ingeschakelde algemene sync wordt dezelfde stand op de gekozen servers bevestigd. Deze knop start geen volledige synchronisatie en downloadt geen lijsten.
@@ -96,6 +98,41 @@ De ongewijzigde **AdGuardHome Sync v0.9.4** is in de Docker-container opgenomen.
 
 DHCP, luisterinterfaces/poorten, TLS-certificaten en AdGuard-gebruikers worden niet gekloond. Voor zover bereikbaar worden vóór geavanceerde wijzigingen lokale snapshots bewaard in `/data/settings-backups`, maximaal 20; er is geen automatische rollback. Een gedeeltelijk mislukte actie blijft zichtbaar. Recente acties bevatten geen wachtwoorden of ruwe serverlogs.
 
+## Beveiliging en Wazuh
+
+**VenGuard is geen router, firewall of DDoS-filter.** De container heeft geen host-netwerkrechten, packet capture of firewallbevoegdheden gekregen. De DNS-dienst blijft los van VenGuard werken.
+
+De pagina **Beveiliging** toont:
+
+- Mislukte en geslaagde aanmeldingen op VenGuard zelf, met bron-IP en tijd. Er worden maximaal 500 gebeurtenissen lokaal bewaard; het dashboard toont een selectie. Wachtwoorden, codes en sessietokens worden niet gelogd.
+- Een tijdelijke aanmeldbeperking na 10 mislukte pogingen in 5 minuten per IP. Dit beperkt uitsluitend toegang tot VenGuard, niet tot andere servers of het netwerk.
+- Een API-limiet van 120 verzoeken per minuut per IP, maximaal 32 gelijktijdige HTTP-verbindingen en een leestimeout voor onvolledige aanvragen. Dit begrenst de eigen app; het biedt geen garantie tegen DDoS.
+- Een optionele **alleen-lezen Wazuh-indexerkoppeling**: maximaal 100 alerts met niveau 5 of hoger uit de laatste 30 minuten, iedere minuut opgehaald. Alleen de geselecteerde alertvelden worden opgehaald en getoond. Een lege selectie bewijst niet dat je hele netwerk veilig is.
+- Expliciete dekkingsstatus: volledig netwerkverkeer en firewall-blokkering zijn **niet aangesloten**.
+
+### Wazuh koppelen
+
+Installeer Wazuh apart of gebruik een bestaande installatie. Richt agents/logbronnen in voor de servers en diensten die je wilt volgen. VenGuard installeert of herconfigureert geen Wazuh-manager, indexer of agents.
+
+1. Maak in Wazuh/OpenSearch een afzonderlijk account met uitsluitend leesrechten op `wazuh-alerts-*`.
+2. Open VenGuard **Beveiliging**, vul het indexer-adres in (meestal `https://HOST:9200`), gebruikersnaam en wachtwoord.
+3. Schakel ophalen in, sla op en kies **Wazuh nu ophalen**.
+4. Gebruik het **indexer**-adres, niet het Wazuh-dashboard of de manager-API op poort 55000.
+
+Certificaatvalidatie blijft aan. Gebruik voor een eigen CA een vertrouwde certificaatketen in de container, bijvoorbeeld via een alleen-lezen CA-bundelmount en `SSL_CERT_FILE` in een Compose-override. Die bundel moet ook de gebruikelijke openbare CA’s bevatten, zodat HTTPS-downloads van filterbronnen blijven werken. Er is geen knop om TLS-validatie uit te zetten. Credentials staan uitsluitend in `/data/security.json` met rechten `0600`, buiten de instellingenexport. Bescherm het datavolume en back-ups.
+
+Achter een reverse proxy: vul uitsluitend de daadwerkelijke proxy-IP’s/CIDR’s in bij **Vertrouwde reverse-proxy-IP’s**. Zonder deze instelling wordt het socket-IP gebruikt, zodat bezoekers niet zelf een ander IP kunnen opgeven via `X-Forwarded-For`. Een gedeeld proxy-IP kan dan ook een gedeelde aanmeldlimiet betekenen. De proxy moet inkomende forwardingheaders correct overschrijven of aanvullen. Vertrouw nooit het gehele internet als proxy.
+
+### Naar een echte netwerkbeschermlaag
+
+Voor volledige verkeersmetadata zijn flow- of sensorbronnen nodig op een plek waar het verkeer langs komt, bijvoorbeeld router/firewall-flowlogs of een geschikte netwerksensor. Wazuh kan meldingen uit die bronnen verzamelen; DNS-logs laten alleen DNS-aanvragen zien. Versleutelde inhoud is daarmee niet automatisch leesbaar.
+
+Wazuh Active Response kan gericht aanvallende IP’s op ondersteunde endpoints laten blokkeren. Dat is een aparte configuratie met expliciete doelhosts, uitsluitingen en een tijdelijke blokkadeduur. VenGuard voert zulke blokkades in deze versie niet uit. Voordat een firewallkoppeling wordt toegevoegd, moeten router/firewall, publieke toegangsroutes, proxy/tunnel en beheer-/VPN-adressen bekend zijn. Zo voorkom je blokkeren van je eigen toegang of een proxy die al je bezoekers vertegenwoordigt.
+
+Een bron-IP lokaal droppen is iets anders dan je internetlijn beschermen. Bij een volumetrische DDoS moet verkeer vóór je aansluiting worden gefilterd door een geschikte provider/upstreamdienst. Zelf een doeladres blackholen kan juist je eigen dienst onbereikbaar maken. Gebruik geen automatische blokkade uitsluitend op basis van een druk DNS-apparaat of een los Wazuh-signaal.
+
+Officiële achtergrond: [Wazuh indexer API](https://documentation.wazuh.com/current/user-manual/indexer-api/index.html), [Wazuh Active Response](https://documentation.wazuh.com/current/user-manual/capabilities/active-response/ar-use-cases/blocking-ssh-brute-force.html), [Wazuh systeemeisen](https://documentation.wazuh.com/current/quickstart.html) en [volumetrische DDoS](https://www.cloudflare.com/learning/ddos/what-is-a-ddos-attack/).
+
 ## Eigen account en 2FA
 
 1. Log in met het installatiewachtwoord uit `.env`.
@@ -152,6 +189,7 @@ node --check app/static/app.js
 node --check app/static/hub.js
 node --check app/static/filters.js
 node --check app/static/account.js
+node --check app/static/security.js
 bash -n start.sh update.sh
 ```
 
