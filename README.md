@@ -104,7 +104,7 @@ Deze modus filtert op **gebruik**, niet op land. Alleen `.nl` blokkeren zou veel
 - Externe bronnen worden standaard elke **24 uur** bijgewerkt. Kies eventueel 6, 12 of 48 uur.
 - Eigen regel- en pakketwijzigingen starten automatisch een nieuwe opbouw.
 - AdGuard-logregels worden bij een ingestelde koppeling elke **60 seconden** opgehaald. De webinterface ververst de weergave ongeveer elke 7 seconden.
-- Met automatisch synchroniseren aan vraagt VenGuard na een opbouw aan AdGuard om filters te verversen. AdGuard kan dit verzoek begrenzen of eerder gedownloade data blijven gebruiken; de knop is geen garantie voor onmiddellijke toepassing. Controleer met **Domein testen** en wacht zo nodig op het AdGuard-update-interval.
+- Met automatisch synchroniseren aan vraagt VenGuard na een gewijzigde lijst of gewijzigde instellingen aan AdGuard om filters te verversen. Ongewijzigde lijstinhoud veroorzaakt geen herhaald verversverzoek. AdGuard kan dit verzoek begrenzen of eerder gedownloade data blijven gebruiken; de knop is geen garantie voor onmiddellijke toepassing. Controleer met **Domein testen** en wacht zo nodig op het AdGuard-update-interval.
 - Zonder automatisch synchroniseren blijft de lokale lijst wel automatisch opgebouwd. AdGuard haalt die op volgens zijn eigen ingestelde interval, of via **Koppel / ververs in AdGuard**.
 
 Het lijstadres bevat een willekeurig toegangstoken. AdGuard kan die URL ophalen zonder je beheerwachtwoord. Behandel de URL als privé en maak VenGuard niet via een openbare tunnel toegankelijk zonder passende toegangsbescherming; de lijst moet voor AdGuard bereikbaar blijven.

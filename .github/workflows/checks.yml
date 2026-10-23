@@ -26,7 +26,7 @@ jobs:
       - name: Start productiecontainer met Compose
         run: |
           printf 'VENGUARD_PASSWORD=ci-only-disposable-test-password\n' > .env
-          docker compose up -d --build
+          bash start.sh
           for attempt in $(seq 1 30); do
             if [ "$(docker inspect --format '{{.State.Health.Status}}' venguard)" = healthy ]; then
               curl --fail http://127.0.0.1:8098/health

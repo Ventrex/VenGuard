@@ -26,7 +26,7 @@ fi
 chmod 600 .env
 # Never source .env: it is configuration, not executable shell code.
 docker compose up -d --build
-for attempt in {1..30}; do
+for attempt in {1..45}; do
   state="$(docker inspect --format '{{.State.Health.Status}}' venguard 2>/dev/null || true)"
   if [[ "$state" == healthy ]]; then break; fi
   sleep 1

@@ -93,7 +93,7 @@ class Store:
         self.fetch_requested=False; self.job={'running':False,'error':'','last_build':None,'last_sync':None,'sync_error':''}
         self.report=read_json(self.dir/'report.json',{'count':0,'sources':[],'built':None,'added':0,'removed':0})
         self.origins={}; self.last_log=[]; self.last_poll=0; self.poll_error=''; self.last_refresh=0
-        self.revision=0
+        self.revision=0; self.last_synced_revision=-1
         self.save()
         if not (self.dir/'filter.txt').exists():
             lines,_,_=compose(self.config,self.caches,self.observed)
@@ -139,6 +139,7 @@ class Store:
     def sync(self):
         # Only add/re-enable our single list, never overwrite custom rules or other lists.
         with self.agh_lock:
+            with self.lock: revision_at_start=self.revision
             url=self.feed_url(); status=self.agh('filtering/status')
             found=next((f for f in status.get('filters',[]) if f.get('url')==url),None)
             if found is None:
@@ -146,7 +147,8 @@ class Store:
             elif not found.get('enabled'):
                 self.agh('filtering/set_url',{'url':url,'whitelist':False,'data':{'url':url,'name':found.get('name','VenGuard Custom DNS'),'enabled':True}})
             self.agh('filtering/refresh',{'whitelist':False})
-            with self.lock: self.job['last_sync']=utc(); self.job['sync_error']=''
+            with self.lock:
+                self.job['last_sync']=utc(); self.job['sync_error']=''; self.last_synced_revision=revision_at_start
             return {'ok':True,'message':'VenGuard-lijst aangeboden en een filterverversing aangevraagd. Controleer met Domein testen wat AdGuard nu toepast.','url':url}
     def poll(self):
         result=self.agh('querylog',query={'limit':1000})
@@ -190,19 +192,19 @@ class Store:
             self.caches=caches
             lines,stats,origins=compose(config,caches,self.observed)
             old=set(l for l in (self.dir/'filter.txt').read_text().splitlines() if l and not l.startswith('!'))
-            text=self.feed_text(lines)
+            changed=set(lines)!=old
             previous=self.dir/'filter.txt'
             backups=self.dir/'backups'; backups.mkdir(exist_ok=True)
             # A short local history for recovery; credentials never enter these files.
-            if set(lines)!=old and previous.exists():
+            if changed and previous.exists():
                 atomic(backups/(str(time.time_ns())+'.txt'),previous.read_text())
                 for file in sorted(backups.glob('*.txt'))[:-10]: file.unlink()
-            atomic(previous,text)
+            if changed or not previous.exists(): atomic(previous,self.feed_text(lines))
             self.origins=origins
             self.report={'count':len(lines),'sources':stats,'built':utc(),'added':len(set(lines)-old),'removed':len(old-set(lines)),'mode':config['mode'],'observed':len(self.observed)}
             atomic(self.dir/'cache.json',json.dumps(caches)); atomic(self.dir/'report.json',json.dumps(self.report,ensure_ascii=False))
             self.job.update(running=False,last_build=utc())
-            sync=config.get('auto_sync',False) and bool(config['public_url']) and bool(config['adguard']['url'])
+            sync=config.get('auto_sync',False) and bool(config['public_url']) and bool(config['adguard']['url']) and (changed or self.last_synced_revision!=rev or bool(self.job['sync_error']))
         if sync:
             try: self.sync()
             except Exception as e:

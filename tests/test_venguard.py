@@ -177,6 +177,17 @@ class IntegrationTests(unittest.TestCase):
         self.assertIn('@@||manual.example.net^$client=192.0.2.83',(self.s.dir/'filter.txt').read_text())
         same=Store(self.tmp.name)
         self.assertEqual(len([r for r in same.config['rules'] if r['domain']=='manual.example.net']),1)
+    def test_unchanged_build_does_not_repeat_remote_refresh(self):
+        self.s.last_synced_revision=-1
+        with patch.object(self.s,'sync',wraps=self.s.sync) as spy:
+            self.s.rebuild(False)
+            first=(self.s.dir/'filter.txt').read_text()
+            self.s.rebuild(False)
+            self.assertEqual(spy.call_count,1)
+            self.assertEqual((self.s.dir/'filter.txt').read_text(),first)
+            self.s.revision+=1
+            self.s.rebuild(False)
+            self.assertEqual(spy.call_count,2)
     def test_wrong_token_and_traversal_refused(self):
         for path in ['/lists/not-the-token/filter.txt','/../config.json','/config.json']:
             with self.subTest(path=path),self.assertRaises(urllib.error.HTTPError):urllib.request.urlopen(self.base+path)
