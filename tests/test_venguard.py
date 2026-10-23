@@ -53,7 +53,7 @@ https://example.org/file
     def test_unknown_stays_unknown(self):
         self.assertFalse(explain('arbitrary.example.net')['known'])
         self.assertIsNone(explain('login.dpgmedia.net')['pack'])
-        self.assertEqual(explain('some.amazonaws.com')['category'],'Gedeelde infrastructuur')
+        self.assertEqual(explain('some.amazonaws.com')['category'],'Niet geclassificeerd')
         self.assertFalse(explain('notamazonaws.com')['known'])
     def test_scoped_allow_rule(self):
         self.assertEqual(rule_text({'action':'allow','domain':'ads.example.net','client':'192.0.2.83'}),'@@||ads.example.net^$client=192.0.2.83')
@@ -79,12 +79,11 @@ class ComposeTests(unittest.TestCase):
     def test_disabled_source(self):
         self.c['sources'][0]['enabled']=False;self.c['sources'][1]['enabled']=False
         self.assertEqual(compose(self.c,self.cache,{})[0],[])
-    def test_toggle_pack_not_whole_publisher(self):
-        self.c['packs']={'dpg_ads':True}
-        lines,_,_=compose(self.c,{}, {})
-        self.assertIn('||advertising-module.api.dpgmedia.cloud^',lines)
-        for d in ['dpgmedia.cloud','dpgmedia.net','login.dpgmedia.net','graph.nu.nl','mask.icloud.com']:
-            self.assertNotIn('||'+d+'^',lines)
+    def test_direct_rules_do_not_leak_into_downloaded_subscription(self):
+        self.c['direct_rules']=True;self.c['rules']=[{'domain':'payment.example.net','action':'allow','enabled':True}]
+        lines,_,_=compose(self.c,self.cache,{})
+        self.assertNotIn('@@||payment.example.net^',lines)
+        self.assertIn('||example.net^',lines)
 
 class MockAGH(BaseHTTPRequestHandler):
     def log_message(self,*args):pass
@@ -97,12 +96,13 @@ class MockAGH(BaseHTTPRequestHandler):
         if self.headers.get('Authorization')!='Basic dGVzdDpzZWNyZXQ=':
             self.send_response(401);self.end_headers();return
         if path=='/control/status': value={'version':'v0.107.test','protection_enabled':True}
-        elif path=='/control/filtering/status': value={'enabled':True,'filters':self.server.filters,'user_rules':['@@||keep-existing.example.net^']}
+        elif path=='/control/filtering/status': value={'enabled':True,'filters':self.server.filters,'user_rules':getattr(self.server,'user_rules',['@@||keep-existing.example.net^'])}
         elif path=='/control/querylog': value={'data':[{'time':utc(),'client':'192.0.2.83','question':{'name':'advertising-module.api.dpgmedia.cloud','type':'A'},'reason':'NotFilteredNotFound','status':'NOERROR','rules':[]},{'time':utc(),'client':'192.0.2.83','question':{'name':'tracker.example.net','type':'AAAA'},'reason':'FilteredBlackList','status':'NOERROR','rules':[{'text':'||tracker.example.net^','filter_list_id':1}]}]}
         elif path=='/control/clients':value={'clients':[]}
         elif path=='/control/filtering/check_host':
             self.server.last_check=urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
             value={'reason':'FilteredBlackList','rules':[{'text':'||tracker.example.net^','filter_list_id':42}]}
+        elif path=='/control/filtering/set_rules':self.server.user_rules=body['rules'];value={}
         elif path=='/control/filtering/add_url':
             # A real callback from AdGuard to verify the list URL can be fetched without UI auth.
             with urllib.request.urlopen(body['url'],timeout=2) as r:self.server.downloaded=r.read().decode()
@@ -158,23 +158,24 @@ class IntegrationTests(unittest.TestCase):
         self.assertTrue(first['ok']);self.assertEqual(first['url'],second['url'])
         self.assertEqual(sum(x['url']==first['url'] for x in self.agh.filters),1)
         self.assertIn('VenGuard Custom DNS',self.agh.downloaded)
-        self.assertFalse(any('/set_rules' in p for _,p in self.agh.calls))
+        self.assertIn('@@||keep-existing.example.net^',getattr(self.agh,'user_rules',['@@||keep-existing.example.net^']))
     def test_log_and_adguard_client_check(self):
         self.call('poll',{})
         result=self.call('log?status=allowed&client=192.0.2.83')
         self.assertEqual(len(result['data']),1)
-        self.assertEqual(result['data'][0]['classification']['category'],'DPG-advertenties')
+        self.assertEqual(result['data'][0]['classification']['category'],'Mogelijke advertenties')
         checked=self.call('check?domain=tracker.example.net&client=192.0.2.83&type=AAAA')
         self.assertEqual(checked['adguard']['reason'],'FilteredBlackList')
         self.assertEqual(self.agh.last_check['client'],['192.0.2.83'])
         self.assertEqual(self.agh.last_check['qtype'],['AAAA'])
     def test_add_scoped_rule_persistence_and_rebuild(self):
-        self.call('rules',{'action':'block','domain':'manual.example.net','client':'192.0.2.83','note':'Test'})
+        result=self.call('rules',{'action':'block','domain':'manual.example.net','client':'192.0.2.83','match':'suffix','note':'Test'});self.assertTrue(result['applied']['ok'])
         self.s.rebuild(False)
-        self.assertIn('||manual.example.net^$client=192.0.2.83',(self.s.dir/'filter.txt').read_text())
-        self.call('rules',{'action':'allow','domain':'manual.example.net','client':'192.0.2.83'})
+        self.assertIn('||manual.example.net^$client=192.0.2.83',self.agh.user_rules)
+        self.assertNotIn('manual.example.net',(self.s.dir/'filter.txt').read_text())
+        self.call('rules',{'action':'allow','domain':'manual.example.net','client':'192.0.2.83','match':'suffix'})
         self.s.rebuild(False)
-        self.assertIn('@@||manual.example.net^$client=192.0.2.83',(self.s.dir/'filter.txt').read_text())
+        self.assertIn('@@||manual.example.net^$client=192.0.2.83',self.agh.user_rules)
         same=Store(self.tmp.name)
         self.assertEqual(len([r for r in same.config['rules'] if r['domain']=='manual.example.net']),1)
     def test_unchanged_build_does_not_repeat_remote_refresh(self):

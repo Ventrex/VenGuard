@@ -2,35 +2,10 @@
 import ipaddress
 import re
 from collections import Counter
-from catalog import COMPATIBILITY
+import time
 
-# Descriptions are local annotations, not live reputation or malware verdicts.
-CATALOGUE = [
-    ('advertising-module.api.dpgmedia.cloud', 'DPG-advertenties', 'Advertentiemodule bij DPG Media, onder meer op Nederlandse nieuwssites.', 'dpg_ads', 'Functie afgeleid uit domeinnaam en aangeleverde NU.nl-log; geen live verificatie.'),
-    ('creative.dpgdsp-adv-prod.dpgmedia.cloud', 'DPG-advertenties', 'Waarschijnlijk advertentiemateriaal van het DPG-advertentieplatform.', 'dpg_ads', 'Waarschijnlijke functie op basis van naam en context.'),
-    ('prebid-server.dpgmedia.net', 'DPG-advertenties', 'Waarschijnlijk advertentieveilingen via Prebid bij DPG Media.', 'dpg_ads', 'Waarschijnlijke functie op basis van naam en context.'),
-    ('prebid.optinadserving.com', 'Advertenties', 'Waarschijnlijk een Prebid-advertentieveiling.', 'dpg_ads', 'Waarschijnlijke functie op basis van naam en context.'),
-    ('tracking-module.api.dpgmedia.cloud', 'DPG-metingen', 'Waarschijnlijk een module voor bezoekers- of gebruiksmetingen bij DPG Media.', 'dpg_tracking', 'Waarschijnlijke functie op basis van naam en context.'),
-    ('tracking-module.tracking.dpgmedia.cloud', 'DPG-metingen', 'Waarschijnlijk bezoekers- of gebruiksmetingen bij DPG Media.', 'dpg_tracking', 'Waarschijnlijke functie op basis van naam en context.'),
-    ('collector.brandmetrics.com', 'Publieksmeting', 'Waarschijnlijk meting van het effect van advertenties via Brand Metrics.', 'measurement', 'Lokale beschrijving; geen live onderzoek.'),
-    ('end.nmo-ep.nl', 'Nederlandse publieksmeting', 'Waarschijnlijk een endpoint voor het Nationaal Media Onderzoek.', 'measurement', 'Waarschijnlijke functie op basis van naam en context.'),
-    ('nmodpgendpoint.2cnt.net', 'Nederlandse publieksmeting', 'Waarschijnlijk publieksmeting voor DPG Media / NMO.', 'measurement', 'Waarschijnlijke functie op basis van naam en context.'),
-    ('nmoendpoint.northeurope.cloudapp.azure.com', 'Nederlandse publieksmeting', 'Waarschijnlijk NMO-publieksmeting op Microsoft Azure.', 'measurement', 'Waarschijnlijke functie op basis van naam en context.'),
-    ('region1.app-analytics-services-att.com', 'App-metingen', 'Waarschijnlijk app-analyses; de precieze eigenaar is hier niet vastgesteld.', 'measurement', 'Lage zekerheid; gebaseerd op domeinnaam.'),
-    ('mask.icloud.com', 'Apple Privédoorgifte', 'Onderdeel van iCloud Privédoorgifte. Een DNS-verzoek bewijst niet dat de functie actief is.', 'relay', 'Apple documenteert mask.icloud.com en mask-h2.icloud.com voor Privédoorgifte.'),
-    ('mask-h2.icloud.com', 'Apple Privédoorgifte', 'Onderdeel van iCloud Privédoorgifte. Blokkeren schakelt privacybescherming op dit netwerk mogelijk uit.', 'relay', 'Apple-documentatie.'),
-    ('mask.apple-dns.net', 'Apple-netwerkdienst', 'Apple-domein in deze log. De precieze rol is hier niet geverifieerd; niet automatisch blokkeren.', None, 'Onvoldoende zekerheid.'),
-    ('gateway.icloud.com', 'Apple iCloud', 'Apple iCloud-dienst; dit verzoek alleen is geen aanwijzing voor reclame.', None, 'Algemene domeinkennis; precieze functie niet vastgesteld.'),
-    ('login.dpgmedia.net', 'DPG-inloggen', 'Inlogdienst van DPG Media. Blokkeren kan aanmelden verstoren.', None, 'Functie afgeleid uit naam en context.'),
-    ('myprivacy-static.dpgmedia.net', 'DPG-privacykeuze', 'Waarschijnlijk bestanden voor privacy- of toestemmingskeuzes. Niet standaard blokkeren.', None, 'Waarschijnlijke functie op basis van naam en context.'),
-    ('graph.nu.nl', 'NU.nl-inhoud', 'Waarschijnlijk een inhouds-API voor NU.nl. Blokkeren kan artikelen of de site verstoren.', None, 'Waarschijnlijke functie op basis van naam en context.'),
-]
-PACKS = [
-    {'id':'dpg_ads','name':'DPG-advertenties','description':'Gerichte advertentie-endpoints uit je NU.nl-log. Kan videoreclame of onderdelen van een pagina verstoren.','enabled':True},
-    {'id':'dpg_tracking','name':'DPG-metingen','description':'Gerichte trackingmodules bij Nederlandse DPG-sites.','enabled':True},
-    {'id':'measurement','name':'Nederlandse publieksmetingen','description':'NMO en enkele meetdiensten. Optioneel; kan statistieken of spelers beïnvloeden.','enabled':False},
-    {'id':'relay','name':'Apple Privédoorgifte blokkeren','description':'Optioneel: blokkeert de twee door Apple gedocumenteerde relay-hosts. Vermindert privacybescherming en kan een Apple-melding geven.','enabled':False},
-]
+CATALOGUE=[]
+PACKS=[]
 
 def domain(value):
     if not isinstance(value, str):
@@ -104,16 +79,21 @@ def parse_list(text):
     return sorted(rules),dict(counts),examples
 
 def explain(d):
-    for host,category,description,pack,evidence in CATALOGUE:
-        if d==host or d.endswith('.'+host):
-            return {'category':category,'description':description,'evidence':evidence,'pack':pack,'known':True}
-    for host,label in [('akamaiedge.net','Akamai'),('akamai.net','Akamai'),('edgekey.net','Akamai'),('amazonaws.com','Amazon AWS'),('awsglobalaccelerator.com','Amazon AWS'),('cloudapp.azure.com','Microsoft Azure')]:
-        if d==host or d.endswith('.'+host):
-            return {'category':'Gedeelde infrastructuur','description':f'{label} levert infrastructuur voor veel diensten. De naam vertelt niet of dit reclame of noodzakelijke inhoud is.','evidence':'Bekende infrastructuur; individuele dienst onbekend.','pack':None,'known':True}
-    return {'category':'Onbekend','description':'Geen betrouwbare lokale uitleg beschikbaar. Bekijk de aanleiding en controleer het domein voordat je blokkeert.','evidence':'Geen classificatie; dit is geen veiligheidsbeoordeling.','pack':None,'known':False}
+    # Transparent hints, never a brand-specific whitelist or a reputation verdict.
+    labels=d.lower().replace('-','.').split('.')
+    hints=[(('ads','ad','advertising','advertisement','prebid','adserver'),'Mogelijke advertenties','De naam kan op een advertentiedienst wijzen. Controleer het gebruik voordat je blokkeert.'),
+           (('tracking','tracker','analytics','metrics','telemetry','measurement'),'Mogelijke metingen','De naam kan op tracking of gebruiksmeting wijzen. Dit is niet geverifieerd.'),
+           (('payment','payments','checkout','pay','auth','login','identity'),'Mogelijke sitefunctie','De naam kan op aanmelden, afrekenen of een andere sitefunctie wijzen. Maak zo nodig een gerichte uitzondering.'),
+           (('cdn','static','assets','images'),'Gedeelde bestanden','Dit kan inhoud, afbeeldingen of andere bestanden leveren. Blokkeren kan zichtbare functies verstoren.')]
+    for words,category,description in hints:
+        if set(labels)&set(words):return {'category':category,'description':description,'evidence':'Indicatie op basis van domeinnaam; geen inhoudsanalyse of veiligheidsbeoordeling.','pack':None,'known':False}
+    return {'category':'Niet geclassificeerd','description':'Geen geverifieerde functie bekend. Bekijk het moment, het apparaat en de toegepaste filterregel voordat je beslist.','evidence':'Geen automatische reputatie- of inhoudsbeoordeling.','pack':None,'known':False}
 
 def rule_text(item):
-    return ('@@' if item['action']=='allow' else '')+'||'+item['domain']+'^'+('$client='+item['client'] if item.get('client') else '')
+    prefix='@@' if item['action']=='allow' else ''
+    # An anchored regex makes an exact DNS hostname explicit and cannot widen to a parent.
+    pattern='/^'+re.escape(item['domain'])+'[.]?$/' if item.get('match','suffix')=='exact' else '||'+item['domain']+'^'
+    return prefix+pattern+('$client='+item['client'] if item.get('client') else '')
 
 def compose(config,caches,observed):
     merged=set(); origins={}; stats=[]
@@ -138,12 +118,8 @@ def compose(config,caches,observed):
         if pack and config['packs'].get(pack,False):
             merged.add('||'+host+'^'); origins.setdefault(host,[]).append('Nederlands keuzepakket')
     for item in config['rules']:
-        if item.get('enabled',True):
+        if not config.get('direct_rules',False) and item.get('enabled',True) and (not item.get('expires_at') or item['expires_at']>time.time()):
             merged.add(rule_text(item)); origins.setdefault(item['domain'],[]).append('Eigen '+item['action'])
-    for preset in COMPATIBILITY:
-        if config.get('compatibility',{}).get(preset['id'],False):
-            for host in preset['domains']:
-                merged.add('@@||'+host+'^');origins.setdefault(host,[]).append('Bereikbaarheid: '+preset['name'])
     # Ordinary allow rules are emitted unchanged. Advanced AdGuard rules outside
     # this generated list may affect their priority; use check_host to verify.
     lines=sorted(merged)

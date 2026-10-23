@@ -7,7 +7,3 @@ PRESETS=[
  {'id':'adult','name':'HaGeZi NSFW','category':'adult','url':BASE+'nsfw.txt','description':'Blokkeert domeinen voor volwassen inhoud. Kan geen afzonderlijke video’s, afbeeldingen of pagina’s beoordelen.'},
  {'id':'gambling','name':'HaGeZi Gambling Mini','category':'gambling','url':BASE+'gambling.mini.txt','description':'Blokkeert gokdomeinen, ook buiten Nederland. Categorieën zijn afhankelijk van de bronbeheerder.'},
 ]
-COMPATIBILITY=[
- {'id':'marktplaats','name':'Marktplaats bereikbaar houden','domains':['marktplaats.nl'],'description':'Staat marktplaats.nl en subdomeinen toe. Als afbeeldingen of betalingen nog falen, controleer de extra domeinen in Netwerkactiviteit.'},
- {'id':'ing','name':'ING bereikbaar houden','domains':['ing.nl'],'description':'Staat ing.nl en subdomeinen toe. Andere betaalproviders worden niet automatisch toegestaan; controleer die gericht via het log.'},
-]

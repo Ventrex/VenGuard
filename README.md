@@ -1,12 +1,10 @@
 # VenGuard
 
-**Jouw netwerk, jouw regels.** Een lokale Docker-webapp voor centraal beheer van meerdere AdGuard Home-servers: één filterlijst, één verzoekenoverzicht, echte AdGuardHome Sync en status per server. Dark mode is standaard; light mode is beschikbaar en wordt per browser onthouden.
+Centraal filterbeheer voor **AdGuard Home en Pi-hole v6**. Combineer DNS-filterbronnen zonder dubbele regels, bekijk verzoeken van meerdere servers en pas gerichte uitzonderingen rechtstreeks toe. Dark mode is standaard; light mode wordt per browser onthouden.
 
-## Installeren op je NUC
+## Installeren en bijwerken
 
-Gebruik een **Linux-machine met Docker Engine en Docker Compose v2**. Bij Proxmox: draai dit in een Linux-VM of een geschikte Docker-LXC, niet rechtstreeks op de Proxmox-host.
-
-Open de terminal/SSH van die machine en voer uit:
+Benodigd: een Linux-host met Docker Engine en Docker Compose v2. Gebruik op Proxmox een Linux-VM of geschikte Docker-LXC.
 
 ```bash
 git clone https://github.com/Ventrex/VenGuard.git
@@ -14,205 +12,125 @@ cd VenGuard
 bash start.sh
 ```
 
-Het script bouwt en start de container en toont:
+Het script bouwt de container, maakt een installatiewachtwoord in `.env` en toont het adres, doorgaans `http://IP-VAN-JE-NUC:8098`. Docker ontbreekt? Gebruik de [officiële installatiehandleiding](https://docs.docker.com/engine/install/). Bij ontbrekende Docker-rechten kun je `sudo bash start.sh` gebruiken.
 
-- het webadres: **`http://IP-VAN-JE-NUC:8098`**;
-- je automatisch aangemaakte installatiewachtwoord (totdat je een eigen account instelt).
-
-Krijg je **geen toegang tot Docker**? Voer in dezelfde map `sudo bash start.sh` uit. Het script installeert Docker niet. Als Docker nog ontbreekt, gebruik de [officiële Docker-installatiehandleiding](https://docs.docker.com/engine/install/) voor jouw Linux-versie, inclusief de Compose-plugin.
-
-## Upgraden naar VenGuard 1.2
-
-In de bestaande VenGuard-map:
+Bijwerken vanuit je bestaande VenGuard-map:
 
 ```bash
 bash update.sh
 ```
 
-Je datavolume, beheerwachtwoord, filterbronnen en eigen regels blijven behouden. De oude enkele AdGuard-koppeling wordt automatisch je eerste bronserver. Het bijgewerkte Docker-image bevat **AdGuardHome Sync v0.9.4**; je hoeft geen extra container, poort of YAML-bestand voor Sync in te richten.
+Het datavolume, account, serverkoppelingen en eigen regels blijven behouden. Eerdere keuzepakketten worden eenmalig overgenomen als gewone domeinregels. Eerdere brede bereikbaarheidspresets worden als **uitgeschakelde** regels bewaard: controleer zo nodig het werkelijk benodigde subdomein. Nieuwe installaties bevatten geen voorgedefinieerde website-uitzonderingen of uitgeverspakketten.
 
-## Nieuw in 1.2
+## Wat versie 1.3 verandert
 
-- **Bescherming aan/uit:** succesvolle AdGuard-acties met een lege reactie of tekst `OK` worden correct verwerkt. HTML-inlogpagina’s worden niet als succes geaccepteerd. Na wijzigen leest VenGuard de bescherming en DNS-filtering terug; beide toestanden staan bij Centraal beheer en per server.
-- **Rustigere status:** bij een mislukte netwerkcontrole volgt één herpoging. Een probleem wordt meteen zichtbaar als “Controle mislukt”; na drie opeenvolgende mislukte rondes krijgt het de gewone storingsstatus. Laatste API-bereikbaarheid en vorige sync-ronde staan apart. Dit herstelt geen onbereikbare host, onjuiste poort, firewall of Docker-netwerk.
-- **Algemene filters:** HaGeZi Light als rustige basis, optionele Threat Intelligence Mini, NSFW en Gambling Mini. De oude Nederlandse pakketten blijven aanvullende keuzes. Er wordt bij een upgrade geen nieuwe inhoudsblokkade of uitzondering aangezet.
-- **Categorieën:** advertenties/tracking, beveiliging, volwassen inhoud, gokken, sociale media en eigen lijsten. Iedere bron krijgt één beheercategorie; sommige bronnen bevatten meerdere soorten regels. Een categorie uitschakelen schakelt alleen de daarin ingedeelde VenGuard-bronnen uit, geen losstaande oude AdGuard-lijst of eigen regel. Je kunt de categorie per bron veranderen.
-- **Uitzonderingen:** optionele schakelaars staan `marktplaats.nl` of `ing.nl` inclusief subdomeinen toe. Dit dekt niet automatisch andere betaal-, afbeelding- of identiteitsproviders. Gebruik Netwerkactiviteit en Domein testen voor een gerichte extra uitzondering. Bestaande `$important`-regels of andere AdGuard-instellingen kunnen de uitkomst beïnvloeden.
+- **Bescherming aan/uit is een kleine opdracht:** eerst de werkelijke stand lezen; als die al klopt wordt niets geschreven. Bij ingeschakelde algemene sync wordt dezelfde stand op de gekozen servers bevestigd. Deze knop start geen volledige synchronisatie en downloadt geen lijsten.
+- **Geen automatische DNS-herconfiguratie:** periodieke AdGuard Sync-rondes kopiëren geen upstreams/cache/DNS-serverconfiguratie. Die onderdelen worden alleen meegenomen bij **Nu alles synchroniseren** of expliciet opslaan in de DNS-editor. Het opnieuw verzenden van sommige AdGuard DNS-instellingen kan DNS herstarten, zelfs bij dezelfde waarden.
+- **Concrete verbindingsfouten:** timeout, geweigerde verbinding, geen route, naamresolutie en echte TLS-fouten krijgen verschillende meldingen. Recente beheeracties en niet bevestigde opdrachten staan apart van historische sync-resultaten.
+- **Directe eigen regels:** eigen domeinregels gaan via de API naar alle ingeschakelde servers, onafhankelijk van het downloaden van de samengevoegde bronlijst. Een onbereikbare server houdt de andere niet tegen. VenGuard probeert openstaande wijzigingen later opnieuw.
+- **Gerichte, tijdelijke uitzonderingen:** standaard alleen de exacte hostnaam, optioneel inclusief subdomeinen. Kies blijvend, 15 minuten, 1 uur of 1 dag. Uitgeschakelde/verlopen regels worden uit het beheerde serverblok verwijderd. Een offline server kan pas worden bijgewerkt als die terugkomt; de toepassing blijft zichtbaar als niet bevestigd.
+- **Pi-hole v6:** status, blokkeringsschakelaar, gecombineerd verzoekenlog, bestaande lijsten, Gravity-updates, eigen globale domeinregels en aparte blokkeer-/toestaanfeeds.
 
-## Eigen account en authenticator-2FA
+Een tijdelijke beheer-API-fout bewijst niet dat DNS uitligt. De twee controles staan apart. De nieuwe diagnose herstelt geen onjuiste poort, firewall, netwerkroute of onbereikbare host.
 
-1. Log na de update in met je bestaande installatiewachtwoord.
-2. Open **Account & 2FA**, kies een gebruikersnaam en een nieuw wachtwoord van minimaal 12 tekens. Vul ter bevestiging je installatiewachtwoord in.
-3. Log opnieuw in met je eigen account. Het installatiewachtwoord uit `.env` werkt nu niet meer op de website.
-4. Open **Account & 2FA → 2FA instellen** en bevestig met je huidige wachtwoord.
-5. Voeg in je authenticator een account **handmatig** toe met de getoonde geheime sleutel: TOTP, 6 cijfers, 30 seconden. Bevestig in VenGuard met de code uit je app. Controleer dat NUC en telefoon een juiste systeemtijd hebben.
-6. Bewaar de tien getoonde herstelcodes op een veilige plek. Ze worden één keer getoond. Iedere herstelcode werkt één keer in plaats van een authenticatorcode. Log daarna opnieuw in.
+## Servers toevoegen
 
-Deze versie heeft één eigen beheerdersaccount, geen openbare registratie of meerdere gebruikersrollen. Wachtwoorden worden met scrypt gehasht; 2FA-sleutel en gehashte herstelcodes worden lokaal in `/data/account.json` met rechten `0600` bewaard. Accountwijzigingen beëindigen bestaande sessies. Een al gebruikte TOTP-code wordt niet opnieuw geaccepteerd; wacht bij snel opnieuw inloggen op de volgende code. De authenticator is geen externe dienst van VenGuard.
+1. Open **Servers & Sync → Server toevoegen**.
+2. Kies **AdGuard Home** of **Pi-hole v6**.
+3. Geef het beheeradres op. Voorbeelden: `http://192.168.0.10:3000` of `http://192.168.0.20`. Gebruik de werkelijke webpoort, niet de DNS-poort.
+4. AdGuard: vul gebruikersnaam en wachtwoord in. Pi-hole: vul het wachtwoord of app-wachtwoord in; gebruikersnaam is niet nodig. Bij Pi-hole-2FA gebruik je een **app-wachtwoord**. VenGuard bewaart en hergebruikt één API-sessie per server.
+5. Vul het echte **DNS-IP** en de **DNS-poort**, meestal 53, in. De UDP-test staat los van het beheeradres.
+6. Kies een bronserver voor het importeren van lijsten en de geavanceerde AdGuard-editor.
+7. Vul bij **Instellingen** het bereikbare **LAN-adres van VenGuard** in. Gebruik geen `localhost` voor toegang vanuit een andere container.
+8. Open **Mijn filterlijst → Koppel / ververs** om de abonnementen aan te bieden. Een Pi-hole Gravity-update kan langer duren dan een normale beheeractie. De API-gebruiker moet die actie mogen uitvoeren.
 
-**Passkeys zijn niet ingebouwd in deze versie.** De gevraagde alternatieve optie is hier authenticator-2FA. WebAuthn vraagt voor gebruik vanaf andere apparaten een beveiligd HTTPS-adres. Gebruik ook voor wachtwoorden en 2FA bij voorkeur HTTPS via je eigen vertrouwde reverse proxy; stel de beheerpoort niet rechtstreeks open op internet. Cookies worden `Secure` als de proxy `X-Forwarded-Proto: https` doorgeeft.
+URLs die eindigen op `/control` (AdGuard) of `/admin`/`/api` (Pi-hole) worden voor de beheerverbinding herkend. HTTPS-certificaten worden gecontroleerd; certificaatvalidatie wordt niet uitgeschakeld.
 
-### Account of 2FA kwijt
+**Continuïteit:** laat je router/DHCP beide DNS-IP’s aan apparaten meegeven. VenGuard staat niet in het DNS-verkeerspad. Bij uitval van VenGuard blijven de DNS-servers hun opgeslagen regels gebruiken. Twee DNS-servers op dezelfde host beschermen niet tegen uitval van die host. Clients kunnen beide servers gebruiken; bij uitval kan omschakelen vertraging geven.
 
-Gebruik eerst een herstelcode. Zonder werkende accounttoegang kun je met lokale Docker-beheertoegang uitsluitend het VenGuard-account wissen:
+## Eén verzameling bronnen
+
+Open **Filters & categorieën**:
+
+- Begin met de rustige algemene basis **HaGeZi Light**.
+- Voeg zo nodig Threat Intelligence Mini, volwassen-inhoud- of goklijsten toe. Deze opties worden niet vanzelf ingeschakeld.
+- Voeg eigen publieke HTTPS-lijsten toe of importeer de ingeschakelde blokkeerlijsten van je bronserver.
+- Deel bronnen in categorieën in. De categorie is een beheerlabel; een bron kan inhoudelijk meerdere soorten regels bevatten.
+- Zet een bron of categorie uit zonder die te verwijderen.
+- Bekijk per bron regels, geselecteerde regels, overlap, laatste download en eventuele fouten.
+- Schakel na controle oude overlap uit bij **Bestaande lijsten op de bronserver**. Zolang andere lijsten actief zijn, kunnen die blijven blokkeren.
+
+Standaard wordt elke 24 uur bijgewerkt; in Instellingen kies je 6, 12, 24 of 48 uur. Een mislukte download behoudt de laatste goede cache. De import neemt complete domeinregels, hostsregels en eenvoudige `||domein^`/`@@||domein^`-regels over. Browserregels, URL-paden, regexen en geavanceerde modifiers uit externe bronnen worden overgeslagen, niet verbreed.
+
+Limieten: 30 bronnen, 24 MiB per download, 1 miljoen opgeslagen bronregels. De volledige modus dekt nieuwe domeinen meteen volgens de bron; **Alleen gezien** selecteert uit log-steekproeven van maximaal 30 dagen en blokkeert nieuwe domeinen pas na waarnemen en verversen. Gebruik de volledige modus voor beveiligingslijsten.
+
+## Een vastlopende functie direct vrijgeven
+
+1. Open **Netwerkactiviteit** en filter op het apparaat en **Geblokkeerd**.
+2. Bekijk het tijdstip en de toegepaste filterregel. Een domeinnaam alleen bewijst niet wat de dienst doet.
+3. Kies **Nu toestaan · 15 min** naast het benodigde verzoek. Dit maakt een exacte uitzondering; geen complete hoofdwebsite wordt automatisch toegestaan.
+4. VenGuard past de regel rechtstreeks toe en toont hoeveel servers die bevestigen. De logpagina blijft open, inclusief je zoekfilters.
+5. Beheer eindtijd, aan/uit en verwijderen bij **Eigen regels**. Met de gewone toestaan-/blokkeeractie kies je zelf het domeinbereik en de duur.
+
+Bij alleen AdGuard geldt de snelle uitzondering voor het apparaat-IP uit het log. Bij Pi-hole of een gemengde groep gebruikt VenGuard globale regels in Pi-hole-standaardgroep **0**. Andere Pi-hole-groepen moet je daar zelf beheren; apparaat-IP-regels worden niet onveilig vertaald naar globale uitzonderingen.
+
+**Direct toepassen betekent:** de volgende DNS-aanvraag gebruikt de nieuwe regel zodra de server die bevestigt. VenGuard kan een vastgelopen betaling, verbinding of app niet zelf hervatten en kan de DNS-cache van je iPhone niet op afstand wissen. Vaak kan de pagina/app opnieuw proberen; soms is een nieuwe verbindingspoging nodig. Dit is geen automatische herhaling van een betaling.
+
+Eigen regels staan in een herkenbaar VenGuard-blok tussen de overige AdGuard-regels, of als herkenbaar beheerde Pi-hole-domeinen. Overige regels worden behouden. Dubbele, afwijkende bestaande Pi-hole-regels worden niet blind overschreven. De downloadbare bronlijst bevat de samengevoegde **bronnen**; eigen live-regels staan apart zodat een verouderde lijst een verwijderde uitzondering niet opnieuw kan activeren.
+
+DNS kan advertenties van aparte advertentiedomeinen blokkeren. Het kan een gesponsord onderdeel en gewenste inhoud op **dezelfde hostnaam** niet inhoudelijk onderscheiden. Daarvoor is aanvullend een browserfilter nodig. De lokale uitleg bij een domein is een transparante naamindicatie, geen reputatiedienst of inhoudsanalyse.
+
+## Wat wordt gesynchroniseerd?
+
+| Functie | AdGuard Home | Pi-hole v6 |
+| --- | --- | --- |
+| Beheerstatus en onafhankelijke DNS-test | Ja | Ja |
+| Bescherming aan/uit | Ja | Eén blokkeringsschakelaar |
+| Verzoekenlog | Ja | Genormaliseerd in hetzelfde overzicht |
+| Samengevoegde bronnen | AdGuard-abonnement | Afzonderlijk blokkeer- en toestaanabonnement |
+| Exacte en subdomeinregels | Beheerd regelblok | Exacte/regex-domeinen in standaardgroep 0 |
+| Apparaat-IP-regels | Ja | Niet vertaald; gebruik Pi-hole-groepen |
+| Geavanceerde instellingen kopiëren | AdGuard → AdGuard | Geen vertaling van AdGuard-instellingen |
+
+De ongewijzigde **AdGuardHome Sync v0.9.4** is in de Docker-container opgenomen. Kies de onderdelen bij Servers & Sync. De bron blijft leidend; replica’s worden niet automatisch gepromoveerd. Pi-hole wordt nooit als AdGuard-replica aan deze engine doorgegeven. Met een Pi-hole-bron worden alleen de gedeelde VenGuard-functies gebruikt. Stop een eventueel nog los draaiende AdGuard Sync zodra je deze ingebouwde sync gebruikt.
+
+DHCP, luisterinterfaces/poorten, TLS-certificaten en AdGuard-gebruikers worden niet gekloond. Voor zover bereikbaar worden vóór geavanceerde wijzigingen lokale snapshots bewaard in `/data/settings-backups`, maximaal 20; er is geen automatische rollback. Een gedeeltelijk mislukte actie blijft zichtbaar. Recente acties bevatten geen wachtwoorden of ruwe serverlogs.
+
+## Eigen account en 2FA
+
+1. Log in met het installatiewachtwoord uit `.env`.
+2. Open **Account & 2FA** en kies een gebruikersnaam en wachtwoord van minimaal 12 tekens. Bevestig met het installatiewachtwoord.
+3. Log opnieuw in. Het installatiewachtwoord geeft nu geen toegang meer tot de website.
+4. Kies **2FA instellen**, bevestig je wachtwoord en voeg de getoonde sleutel handmatig aan je authenticator toe: TOTP, 6 cijfers, 30 seconden.
+5. Bevestig met een code en bewaar de tien eenmalige herstelcodes. Controleer de systeemtijd van host en telefoon.
+
+Er is één eigen beheerdersaccount; geen openbare registratie. Wachtwoorden worden met scrypt gehasht. Accountwijzigingen beëindigen bestaande sessies. Een TOTP-code wordt één keer geaccepteerd; wacht bij snel opnieuw inloggen op de volgende code. Herstelcodes werken één keer in plaats van een authenticatorcode. Passkeys zijn niet ingebouwd.
+
+Gebruik bij voorkeur HTTPS via een vertrouwde reverse proxy en stel de beheerpoort niet rechtstreeks open op internet. Met `X-Forwarded-Proto: https` gebruikt VenGuard Secure-cookies. De 2FA-sleutel en gehashte herstelcodes staan lokaal in `/data/account.json` met rechten `0600`; bescherm je datavolume en back-ups.
+
+Account/2FA kwijt? Gebruik eerst een herstelcode. Anders kun je met lokale Docker-beheertoegang uitsluitend het VenGuard-account herstellen:
 
 ```bash
 docker compose exec venguard python3 reset_account.py
-# Typ HERSTEL als je het eigen account en 2FA wilt wissen.
+# Typ HERSTEL om het eigen account en 2FA te wissen.
 docker compose restart venguard
 sed -n 's/^VENGUARD_PASSWORD=//p' .env
 ```
 
-Log daarna in met dit installatiewachtwoord en stel je eigen account opnieuw in. Filters, serverkoppelingen en AdGuard-inloggegevens blijven behouden. Dit herstel kan alleen met toegang tot de Docker-host; er is geen onbeveiligde resetknop in de website. Een back-up van het datavolume bevat ook je 2FA-sleutel: bescherm die back-up.
+Log daarna in met het installatiewachtwoord en maak opnieuw een eigen account. Filters en serverkoppelingen blijven behouden. Er is geen onbeveiligde web-resetknop.
 
-### Je twee AdGuard-servers instellen
-
-1. Open **Servers & Sync**. Je oude koppeling staat hier al na een upgrade. Klik op **AdGuard toevoegen** voor je tweede server.
-2. Vul per server een naam, **beheeradres**, gebruikersnaam, wachtwoord en **DNS-IP/poort** in. Bijvoorbeeld beheer `http://192.168.0.10:3000` en DNS `192.168.0.10`, poort `53`. Gebruik de echte adressen en poorten van jouw installaties; beheer kan ook poort 80 of iets anders gebruiken.
-3. Kies welke server de **bronserver** is. Kies de server met de instellingen die je wilt behouden. Alle andere ingeschakelde servers zijn replica’s.
-4. Vul bij **Instellingen → LAN-adres van VenGuard** het bereikbare adres van VenGuard in, bijvoorbeeld `http://192.168.0.20:8098`. Sla op. Bij **Mijn filterlijst** kun je de lijst aan alle servers aanbieden.
-5. Ga terug naar **Servers & Sync**, kies de te synchroniseren onderdelen, vink **Centrale synchronisatie inschakelen** aan en sla op. Hiermee geef je opdracht om de gekozen instellingen op replica’s te vervangen door die van de bronserver. Klik eventueel op **Nu alles synchroniseren**.
-6. Pas voortaan gedeelde instellingen aan via **Centraal beheer**. De bestaande AdGuard-websites blijven bereikbaar voor lokaal of serverspecifiek beheer.
-
-**Belangrijk voor je internetverbinding:** geef via je router/DHCP **beide AdGuard DNS-IP’s** aan je apparaten mee. Twee gesynchroniseerde servers zorgen op zichzelf nog niet voor uitwijkgedrag bij clients. Apparaten kunnen beide DNS-servers gebruiken; het omschakelen bij uitval kan even duren. Een openbare DNS-server als tweede adres kan je filtering omzeilen. Voor uitval van een complete host moeten de twee DNS-servers op verschillende hosts draaien.
-
-VenGuard is geen DNS-proxy en zit niet tussen je apparaten en AdGuard. Valt VenGuard uit, dan gebruiken beide AdGuard-installaties hun laatst opgeslagen instellingen en filterregels verder. Er worden dan tijdelijk geen nieuwe lijsten of instellingen uit VenGuard opgehaald.
-
-**De adressen verschillen:** het AdGuard-beheeradres hoort bij het bestaande AdGuard-portaal. Het VenGuard LAN-adres hoort bij deze app op poort 8098. Gebruik geen `localhost` voor een andere container: dat verwijst vanuit VenGuard naar VenGuard zelf.
-
-## Wat krijg je?
-
-| Onderdeel | Wat je ermee kunt |
-| --- | --- |
-| Overzicht | Aantal regels, bronnen, eigen keuzes en geziene domeinen bekijken. |
-| Servers & Sync | Maximaal 10 servers toevoegen, bron kiezen, beheer-API en echte DNS-aanvragen controleren en synchronisatie per replica volgen. |
-| Centraal beheer | Eigen AdGuard-regels, DNS/upstreams, herschrijvingen, apparaten, geblokkeerde diensten en instellingen van logs/statistieken beheren op de bronserver. Geavanceerde onderdelen hebben een JSON-editor. |
-| Netwerkactiviteit | Eén gecombineerd overzicht van al je servers; filter op server, domein, apparaat en uitkomst. Offline servers verbergen de overige activiteit niet. |
-| Eigen regels | Domeinen blokkeren of toestaan, voor iedereen of alleen een apparaat-IP/CIDR. Regels aan- en uitzetten of verwijderen. |
-| Filters & categorieën | Algemene broncatalogus, categorieën, eigen HTTPS-lijsten, samenvoegen zonder dubbele regels, gerichte uitzonderingen en bestaande AdGuard-lijsten aan/uitzetten, verwijderen en verversen. |
-| Account & 2FA | Eigen beheerdersaccount met gebruikersnaam, wachtwoord, authenticator en eenmalige herstelcodes. |
-| Mijn filterlijst | De samengevoegde lijst doorzoeken en downloaden; de actuele AdGuard-uitkomst per domein en apparaat testen. |
-| Diagnose | Controleren of bescherming en lijstfiltering aanstaan en of clients eigen filtering hebben uitgeschakeld. |
-
-Er is geen API-sleutel, ChatGPT-account, abonnement of externe AI-dienst nodig. Alleen Docker is nodig op de host; Python wordt in het image meegeleverd. De Python-webapp heeft geen pip- of npm-pakketten nodig voor productie. De ongewijzigde Sync-engine wordt bij de Docker-build uit het officiële bakito-image gekopieerd.
-
-## Nederlandse keuzepakketten
-
-- **DPG-advertenties — standaard aan:** enkele specifieke advertentie-endpoints uit een NU.nl/DPG-sessie, waaronder de advertentiemodule en Prebid.
-- **DPG-metingen — standaard aan:** enkele gerichte trackingmodules van DPG.
-- **Nederlandse publieksmetingen — standaard uit:** NMO en een kleine selectie meetdiensten.
-- **Apple Privédoorgifte blokkeren — standaard uit:** een bewuste optionele keuze die privacybescherming kan verminderen en Apple-meldingen kan veroorzaken.
-
-Dit is een kleine lokale catalogus, **geen uitputtende Nederlandse reclamedatabase**. De catalogus blokkeert geen complete uitgever, cloudprovider of CDN. Beschrijvingen vermelden hun zekerheid; functies die alleen uit naam of context zijn afgeleid worden als waarschijnlijk beschreven. Onbekende domeinen blijven **Onbekend**. Een uitleg is geen veiligheids- of malwarebeoordeling.
-
-Als rustige internationale basis is **HaGeZi Light** ingesteld. Ook Nederlandse sites gebruiken internationale advertentie- en meetplatforms. Je kunt die bron uitschakelen en uitsluitend eigen regels en pakketten gebruiken.
-
-## Je bestaande lijsten samenvoegen
-
-1. Voeg je AdGuard-servers toe bij Servers & Sync en kies een bronserver.
-2. Open **Filters & categorieën → Importeer uit AdGuard**.
-3. VenGuard kopieert van de bronserver de URLs van **ingeschakelde DNS-blokkeerlijsten**. Uitgeschakelde lijsten en toestaanlijsten worden niet in deze bronimport meegenomen. Bestaande eigen AdGuard-regels beheer je apart bij Centraal beheer.
-4. Bekijk per bron het aantal bruikbare DNS-regels, overgeslagen regels en eventuele downloadfouten.
-5. Test jouw VenGuard-lijst in AdGuard. Open daarna **Filters & categorieën → Bestaande lijsten in AdGuard** en schakel oude overlap uit met de aan/uit-schakelaars. Laat de VenGuard-lijst aan. Met filter-sync ingeschakeld volgen de replica’s.
-
-Zolang andere AdGuard-lijsten actief blijven op de bronserver, kunnen ze domeinen blijven blokkeren die jij niet in de VenGuard-lijst hebt geselecteerd. AdGuard Sync kan ook die bestaande lijsten naar de replica’s kopiëren; kies daarom bewust welke lijsten je op de bronserver actief laat. Bestaande AdGuard-uitzonderingen kunnen eveneens voorrang hebben. **Domein testen** toont de actuele AdGuard-uitkomst.
-
-### Wat wordt samengevoegd?
-
-VenGuard ondersteunt:
-
-```text
-reclame.example.nl
-0.0.0.0 reclame.example.nl
-||reclame.example.nl^
-@@||inloggen.example.nl^
-```
-
-Dubbele regels worden verwijderd. Geïmporteerde uitzonderingen blijven behouden. Eigen regels kunnen een apparaatscope krijgen, bijvoorbeeld:
-
-```text
-||reclame.example.nl^$client=192.168.0.83
-```
-
-Browserregels voor onderdelen van een pagina, URL-paden, reguliere expressies en bronregels met modifiers worden **overgeslagen**, niet vertaald naar ruimere blokkades. Daarom zijn **DNS-bronnen** de beste invoer. Browserlijsten zoals EasyList Cookie kunnen veel onbruikbare regels bevatten. De importstatus laat dit zien.
-
-Limieten: maximaal 30 bronnen, 24 MiB per download en 1 miljoen opgeslagen bronregels samen. Gebruik bij voorkeur één goede basis in plaats van meerdere grote overlappende lijsten. Bij een mislukte download blijft de laatst opgehaalde goede broncache actief. Zonder eerdere cache wordt die bron nog niet meegenomen; dit is zichtbaar in het dashboard.
-
-## Alleen blokkeren wat je netwerk gebruikt
-
-Onderaan **Filters & categorieën** kies je de lijstmodus:
-
-- **Volledige gekozen bronnen (standaard):** alle ondersteunde bronregels meenemen. Nieuwe domeinen worden meteen door de gekozen bronlijsten gedekt.
-- **Alleen geziene domeinen:** alleen bronblokkades meenemen die overeenkomen met eerder waargenomen domeinen. Ook een ouderdomeinregel wordt meegenomen als een subdomein is gezien. Bronuitzonderingen, eigen regels en gekozen pakketten blijven actief.
-
-**De compacte modus is een afweging:** nieuwe reclame kan bij het eerste bezoek doorlaten, totdat het domein is gezien, de lijst is opgebouwd en AdGuard is ververst. Gebruik deze modus niet als complete beveiligingslijst. VenGuard haalt maximaal **1.000 recente logregels per server per ronde** op, ongeveer iedere 30 seconden plus de tijd voor de netwerkcontroles. Het gezamenlijke overzicht toont maximaal 5.000 regels. Bij druk verkeer worden dus niet alle verzoeken waargenomen. Gezien-domeinen worden maximaal 30 dagen onthouden, tot maximaal 50.000 domeinen. Een IP-adres wordt daarbij niet opgeslagen.
-
-Deze modus filtert op **gebruik**, niet op land. Alleen `.nl` blokkeren zou veel advertenties op Nederlandse sites missen.
-
-## Automatisch bijwerken
-
-- Externe bronnen worden standaard elke **24 uur** bijgewerkt. Kies eventueel 6, 12 of 48 uur.
-- Eigen regel- en pakketwijzigingen starten automatisch een nieuwe opbouw.
-- AdGuard-logregels en de bereikbaarheid van elke ingeschakelde server worden in een eigen achtergrondtaak opgehaald: iedere 30 seconden plus netwerktijd. De webinterface ververst de weergave ongeveer elke 7 seconden. Een status ouder dan 90 seconden wordt als verouderd getoond, niet als betrouwbaar online.
-- Met automatisch synchroniseren aan vraagt VenGuard na een gewijzigde lijst of gewijzigde instellingen aan alle ingeschakelde AdGuard-servers om filters te verversen. Ongewijzigde lijstinhoud veroorzaakt geen herhaald verversverzoek. AdGuard kan dit verzoek begrenzen of eerder gedownloade data blijven gebruiken; de knop is geen garantie voor onmiddellijke toepassing. Controleer met **Domein testen** en wacht zo nodig op het AdGuard-update-interval.
-- Zonder automatisch synchroniseren blijft de lokale lijst wel automatisch opgebouwd. AdGuard haalt die op volgens zijn eigen ingestelde interval, of via **Koppel / ververs in AdGuard**.
-
-Het lijstadres bevat een willekeurig toegangstoken. AdGuard kan die URL ophalen zonder je beheerwachtwoord. Behandel de URL als privé en maak VenGuard niet via een openbare tunnel toegankelijk zonder passende toegangsbescherming; de lijst moet voor AdGuard bereikbaar blijven.
-
-## Synchronisatie en storingen
-
-VenGuard gebruikt de **echte AdGuardHome Sync v0.9.4-engine van bakito**, gebundeld in dezelfde container. De engine draait per ronde als een apart proces met een gegenereerde privéconfiguratie. Na de ronde verwijdert VenGuard die tijdelijke configuratie. Je beheert alle gegevens in de webinterface; geen Docker-socket of losse Sync-website nodig.
-
-Standaard is de extra centrale instellingen-sync **uit** totdat je minimaal twee servers hebt toegevoegd en hem inschakelt. Daarna is het interval standaard 5 minuten; kies eventueel 1, 15, 30 of 60 minuten. Wijzigingen via Centraal beheer vragen meteen een ronde aan. De reeds bestaande automatische verspreiding van de VenGuard-filterlijst staat hier los van.
-
-Gedeelde onderdelen die je kunt kiezen:
-
-- externe blokkeer- en toestaanlijsten, eigen AdGuard-regels;
-- algemene bescherming, Safe Browsing en Safe Search;
-- DNS-serverinstellingen, upstreams en toegangsregels;
-- DNS-herschrijvingen en apparaatinstellingen;
-- geblokkeerde diensten, log- en statistiekinstellingen.
-
-**Serverspecifiek blijft lokaal:** DHCP-server en leases, TLS-certificaten, webthema van AdGuard, gebruikerswachtwoorden en luisterinterfaces/poorten. Vooral DHCP mag niet blind dubbel actief worden. De dark/light-keuze in VenGuard is een eigen lokale browservoorkeur.
-
-VenGuard toont drie verschillende signalen:
-
-1. **Beheer-API:** kan VenGuard aanmelden en de status lezen?
-2. **DNS UDP:** krijgt VenGuard een geldig DNS-antwoord van het ingestelde IP en de poort? Het testdomein is `example.org`. Dit is een controle vanaf VenGuard, geen bewijs dat elk clientapparaat of elke internetdienst werkt. Een geldig NXDOMAIN-antwoord telt ook als DNS-reactie.
-3. **Sync-resultaat:** rapporteert de echte engine een geslaagde afronding voor de gekozen replica? Alleen een bereikbaar beheerscherm of exitcode 0 wordt niet als geslaagde sync beschouwd. De per-server badge is de laatst gemelde ronde; de tijdstippen staan erbij.
-
-Bij een offline replica gaat een bereikbare replica gewoon door. Een mislukte server wordt bij de volgende ronde opnieuw geprobeerd. Een bronserver die offline is wordt **niet** automatisch vervangen door een replica: zo voorkom je dat een oude configuratie ineens de andere servers overschrijft. Bestaande DNS-resolvers blijven hun laatste configuratie gebruiken. Wijzigingen in de bestaande AdGuard-instellingen vereisen een bereikbare bron; eigen VenGuard-lijstkeuzes kun je wel lokaal blijven aanpassen en aan bereikbare servers aanbieden.
-
-Vóór synchronisatie en centrale wijzigingen bewaart VenGuard voor zover bereikbaar lokale momentopnamen van ondersteunde instellingen in `/data/settings-backups` (maximaal 20 bestanden). Dit zijn herstelgegevens, geen automatische rollback. De bestanden kunnen interne adressen of gevoelige upstream-URLs bevatten; bescherm het datavolume. Een mislukte API-aanroep kan tot gedeeltelijk gewijzigde instellingen leiden; bekijk dan de status en de eigen AdGuard-interface. De gezamenlijke export laat de wachtwoorden van **alle** servers weg.
-
-**Stop je oude losse AdGuard Sync** zodra je de nieuwe ingebouwde sync gebruikt. Laat niet twee sync-processen met verschillende broninstellingen tegelijk dezelfde servers beheren.
-
-## Bijwerken, stoppen en wachtwoord
-
-In de VenGuard-map:
+## Beheer en back-up
 
 ```bash
-# Nieuwe versie downloaden en container opnieuw bouwen; instellingen blijven behouden.
 bash update.sh
-
-# Alleen stoppen.
 docker compose stop
-
-# Weer starten.
 docker compose start
-
-# Log bekijken.
 docker compose logs --tail=50
-
-# Installatiewachtwoord bekijken (werkt alleen als er geen eigen account is).
-sed -n 's/^VENGUARD_PASSWORD=//p' .env
 ```
 
-Een andere webpoort? Pas `VENGUARD_PORT=8098` aan in `.env`, start opnieuw met `bash start.sh` en wijzig daarna ook het VenGuard LAN-adres in de webinterface. De interne containerpoort blijft 8098.
+Wijzig voor een andere webpoort `VENGUARD_PORT` in `.env`, voer `bash start.sh` uit en pas het VenGuard LAN-adres in de website aan. De interne poort blijft 8098.
 
-De container gebruikt een blijvend Docker-volume. Gebruik **niet** `docker compose down -v` als je de data wilt bewaren: `-v` verwijdert het volume. Voor een volledige back-up: bewaar `.env` en het datavolume. In de webinterface kun je daarnaast instellingen exporteren; die export laat wachtwoorden en het lijsttoken weg en is geen volledige herstelback-up.
-
-Volledige datakopie, vanaf de Docker-host:
+Volledige back-up vanaf de Docker-host:
 
 ```bash
 docker compose stop
@@ -222,43 +140,30 @@ cp .env backup/.env
 docker compose start
 ```
 
-Bewaar deze map veilig: hij bevat de AdGuard-inloggegevens. Voor herstel zet je de map `data` terug in `/data` van het VenGuard-volume en herstel je `.env` vóór het starten. De 10 vorige gegenereerde lijstversies staan in `/data/backups`; oude instellingen worden niet automatisch geversioneerd.
+Deze back-up bevat de servercredentials en eventuele 2FA-sleutel. Herstel `data` naar `/data` in het Docker-volume en zet `.env` terug vóór starten. De instellingenexport laat credentials en het lijsttoken weg en is geen volledige back-up. Gebruik geen `docker compose down -v` als je het volume wilt bewaren.
 
-## Wat dit wel en niet oplost
+## Ontwikkeling en verificatie
 
-VenGuard beheert de DNS-lijst. Het vervangt AdGuard Home niet en verandert geen iPhone-, iPad- of routerinstellingen. Als een apparaat DNS-filtering omzeilt of eigen clientinstellingen gebruikt, moet dat apart worden opgelost. De aanwezigheid van `mask.icloud.com` in een log bewijst op zichzelf niet dat Privédoorgifte actief is.
-
-Een DNS-filter kan geen afzonderlijke reclame blokkeren als die hetzelfde domein gebruikt als de gewenste inhoud. Denk aan bepaalde YouTube-advertenties of gesponsorde berichten. Het kan ook geen lege vakken of alle cookievensters uit een pagina verwijderen. Daarvoor is aanvullend een geschikte Safari-/browserfilter nodig.
-
-## Techniek en testen
-
-- Python 3.12, standaardbibliotheek, HTML/CSS/JavaScript en de gebundelde Go Sync-engine; **geen PHP**.
-- Niet-root container, alleen-lezen image, schrijfbare data in `/data`, alle Linux-capabilities uit.
-- Beheer achter wachtwoord en sessiecookie; schrijfverzoeken met herkomstcontrole en een verplichte custom header.
-- AdGuard-wachtwoord lokaal opgeslagen met bestandsrechten `0600`; geen credentials in de frontend of in de instellingenexport.
-- Lokale adressen voor AdGuard zijn toegestaan; externe filterbronnen moeten publieke HTTPS-URLs zijn. TLS-certificaten worden gecontroleerd.
-- Lijsten en configuratie worden atomair vervangen. Een downloadfout verwijdert de vorige goede broncache niet.
-
-Tests uitvoeren zonder Docker:
+Python 3.12-standaardbibliotheek, HTML/CSS/JavaScript en de echte Go Sync-engine; geen PHP en geen pip-/npm-afhankelijkheden voor productie. De container draait niet als root, met alleen-lezen image en schrijfbare data in `/data`.
 
 ```bash
 python3 -m unittest discover -s tests -v
 node --check app/static/app.js
 node --check app/static/hub.js
-node --check app/static/account.js
 node --check app/static/filters.js
+node --check app/static/account.js
 bash -n start.sh update.sh
 ```
 
-GitHub Actions voert tests uit, bouwt het Docker-image, controleert dat de productiecontainer met alleen-lezen bestandssysteem gezond opstart en test de echte gebundelde Sync-binary tegen lokale test-API’s, inclusief een offline replica. `scripts/preview.py` is uitsluitend een wegwerp-UI-demo met testgegevens, zonder echte AdGuard-toegang en zonder inlogscherm. Gebruik die **niet** voor installatie; Docker start altijd `app/server.py` met echte authenticatie.
+GitHub Actions bouwt en start de productiecontainer, controleert authenticatie, test de echte gebundelde Sync-engine tegen lokale testservers en test Pi-hole tegen een afzonderlijke officiële wegwerpcontainer. `scripts/preview.py` is alleen een geïsoleerde UI-demo zonder echte servers of productie-authenticatie; gebruik die niet voor installatie.
 
 ## Bronnen en licenties
 
-- [AdGuard Home API-schema](https://github.com/AdguardTeam/AdGuardHome/blob/master/openapi/openapi.yaml)
+- [AdGuard API](https://github.com/AdguardTeam/AdGuardHome/blob/master/openapi/openapi.yaml)
 - [AdGuard DNS-filterregels](https://adguard-dns.io/kb/general/dns-filtering-syntax/)
-- [Beperkingen van DNS-filtering](https://github.com/AdguardTeam/AdGuardHome/wiki/FAQ#are-there-any-known-limitations)
-- [TOTP-standaard (RFC 6238)](https://www.rfc-editor.org/rfc/rfc6238.html)
-- [HaGeZi DNS-blocklists](https://github.com/hagezi/dns-blocklists)
-- [Apple: Private Relay op netwerken](https://developer.apple.com/support/prepare-your-network-for-icloud-private-relay/)
+- [Pi-hole v6 API](https://docs.pi-hole.net/api/) en [sessieauthenticatie](https://docs.pi-hole.net/api/auth/)
+- [Pi-hole officiële API-schema’s](https://github.com/pi-hole/FTL/tree/master/src/api/docs/content/specs)
+- [HaGeZi DNS-lijsten](https://github.com/hagezi/dns-blocklists)
+- [TOTP RFC 6238](https://www.rfc-editor.org/rfc/rfc6238.html)
 
-De app-code valt onder MIT. De gebundelde AdGuardHome Sync-engine valt onder Apache 2.0; bron, versie en volledige licentie staan in `THIRD-PARTY-NOTICES.md` en `licenses/`. Externe lijsten worden tijdens gebruik opgehaald en behouden hun eigen licenties en bronvoorwaarden. VenGuard is een onafhankelijk project, niet van AdGuard of Apple. De lokale domeincatalogus is een aanpasbare hulpmiddelset, geen automatisch bijgehouden reputatiedienst.
+App-code: MIT. AdGuardHome Sync: Apache 2.0, zie `THIRD-PARTY-NOTICES.md` en `licenses/`. Externe filterbronnen behouden hun eigen licenties. VenGuard is een onafhankelijk project.

@@ -21,8 +21,11 @@ from datetime import datetime, timezone
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from rules import domain, scope, parse_list, explain, compose, PACKS, rule_text
-from catalog import CATEGORIES, PRESETS, COMPATIBILITY
+from catalog import CATEGORIES, PRESETS
 from accounts import AccountMixin
+from providers import PiHole,kind
+from operations import OperationsMixin
+from migrations import migrate
 from hub import HubMixin, SECTIONS, FEATURES, HUB_DEFAULT, write_private, error_text
 
 ROOT=Path(__file__).parent
@@ -68,13 +71,7 @@ def download(url):
         if text.lstrip().lower().startswith(('<!doctype html','<html')): raise ValueError('Deze URL levert een webpagina in plaats van een filterlijst.')
         return text
 
-def safe_network_error(error):
-    if isinstance(error,urllib.error.HTTPError):
-        return {401:'Inloggegevens geweigerd (401).',403:'Toegang geweigerd (403).',404:'Adres niet gevonden (404); controleer de URL en poort.',429:'Te veel verzoeken; probeer het later opnieuw.'}.get(error.code,f'HTTP-fout {error.code}.')
-    if isinstance(error,(TimeoutError,socket.timeout)): return 'Verbinding verlopen; controleer adres, poort en netwerk.'
-    if isinstance(error,urllib.error.URLError): return 'Netwerk- of certificaatfout; controleer URL, DNS en TLS-certificaat.'
-    if isinstance(error,ValueError): return str(error)
-    return 'Verzoek mislukt; controleer de configuratie.'
+def safe_network_error(error):return error_text(error)
 
 DEFAULT={
  'version':1,'mode':'all','public_url':'','auto_refresh_hours':24,'auto_sync':True,
@@ -83,13 +80,15 @@ DEFAULT={
  'rules':[], 'adguard':{'url':'','username':'','password':''}
 }
 
-class Store(HubMixin,AccountMixin):
+class Store(HubMixin,AccountMixin,OperationsMixin):
     def __init__(self,directory):
         self.dir=Path(directory); self.dir.mkdir(parents=True,exist_ok=True)
         self.lock=threading.RLock(); self.agh_lock=threading.Lock()
         self.config=read_json(self.dir/'config.json',DEFAULT)
         self.config.setdefault('categories',{k:True for k in CATEGORIES})
-        self.config.setdefault('compatibility',{})
+        migrate(self.config)
+        self.config['direct_rules']=True
+        self.pihole=PiHole()
         for source in self.config['sources']:source.setdefault('category','ads' if 'hagezi' in source.get('id','') else 'custom')
         self.observed=read_json(self.dir/'observed.json',{})
         self.caches=read_json(self.dir/'cache.json',{})
@@ -100,7 +99,7 @@ class Store(HubMixin,AccountMixin):
         self.report=read_json(self.dir/'report.json',{'count':0,'sources':[],'built':None,'added':0,'removed':0})
         self.origins={}; self.last_log=[]; self.last_poll=0; self.poll_error=''; self.last_refresh=0
         self.revision=0; self.last_synced_revision=-1
-        self.init_hub();self.init_accounts()
+        self.init_hub();self.init_accounts();self.init_operations()
         self.save()
         if not (self.dir/'filter.txt').exists():
             lines,_,_=compose(self.config,self.caches,self.observed)
@@ -120,7 +119,8 @@ class Store(HubMixin,AccountMixin):
     def feed_text(self,lines):
         return '! Title: VenGuard Custom DNS\n! Generated: '+utc()+'\n! DNS-only; source licenses apply. See the VenGuard dashboard.\n'+'\n'.join(lines)+'\n'
     def agh(self,path,body=None,query=None,settings=None,method=None):
-        with self.lock: cfg=copy.deepcopy(settings or self.config['adguard'])
+        with self.lock: cfg=copy.deepcopy(settings or (self.primary() if self.config.get('servers') else self.config['adguard']))
+        if kind(cfg)=='pihole':return self.pihole.adapter(cfg,path,body,query,method)
         if not cfg.get('url'): raise ValueError('Koppel eerst AdGuard Home bij Instellingen.')
         url=valid_url(cfg['url'])
         if url.endswith('/control'): url=url[:-8]
@@ -133,7 +133,7 @@ class Store(HubMixin,AccountMixin):
         data=None if body is None else json.dumps(body).encode()
         if data is not None: headers['Content-Type']='application/json'
         req=urllib.request.Request(target,data=data,headers=headers,method=method)
-        with urllib.request.build_opener(NoRedirect()).open(req,timeout=6) as response:
+        with urllib.request.build_opener(NoRedirect()).open(req,timeout=12) as response:
             raw=response.read(16*1024*1024+1)
             if len(raw)>16*1024*1024: raise ValueError('AdGuard-antwoord te groot.')
             if not raw.strip():
@@ -142,13 +142,12 @@ class Store(HubMixin,AccountMixin):
             if (body is not None or method in ('POST','PUT','DELETE')) and raw.strip() in (b'OK',b'Ok',b'ok'): return {}
             try: return json.loads(raw)
             except json.JSONDecodeError: raise ValueError('AdGuard gaf geen JSON terug; controleer de beheer-URL en poort.')
-    def feed_url(self):
+    def feed_url(self,filename="filter.txt"):
         with self.lock: base=self.config['public_url']
         if not base: raise ValueError('Vul bij Instellingen het LAN-adres van VenGuard in, bijvoorbeeld http://192.168.0.10:8098.')
-        return base+'/lists/'+self.feed_token+'/filter.txt'
+        return base+'/lists/'+self.feed_token+'/'+filename
     def sync(self):
         result=self.publish_all()
-        if self.config['cluster_sync']['enabled']:self.request_cluster()
         return result
     def poll(self):
         return self.poll_cluster_logs()
@@ -218,7 +217,7 @@ class Store(HubMixin,AccountMixin):
             config['adguard']['password_set']=bool(config['adguard'].pop('password',''))
             for server in config.get('servers',[]):
                 server['password_set']=bool(server.pop('password',''))
-            return {'config':config,'packs':PACKS,'categories':CATEGORIES,'presets':PRESETS,'compatibility':COMPATIBILITY,'report':copy.deepcopy(self.report),'job':dict(self.job),'observed':len(self.observed),'poll_error':self.poll_error,'last_poll':self.last_poll or None,'feed_url':self.feed_url() if config['public_url'] else '', 'feed_path':'/lists/'+self.feed_token+'/filter.txt','version':'1.2.0','hub':self.hub_snapshot()}
+            return {'config':config,'packs':PACKS,'categories':CATEGORIES,'presets':PRESETS,'report':copy.deepcopy(self.report),'job':dict(self.job),'observed':len(self.observed),'poll_error':self.poll_error,'last_poll':self.last_poll or None,'feed_url':self.feed_url() if config['public_url'] else '', 'feed_path':'/lists/'+self.feed_token+'/filter.txt','version':'1.3.0','hub':self.hub_snapshot()}
 
 class Handler(BaseHTTPRequestHandler):
     server_version='VenGuard'
@@ -262,13 +261,18 @@ class Handler(BaseHTTPRequestHandler):
         q={k:v[0] for k,v in urllib.parse.parse_qs(parsed.query).items()}
         if path=='/health': return self.respond({'ok':True})
         if path.startswith('/lists/'):
-            expected='/lists/'+self.store.feed_token+'/filter.txt'
-            if not hmac.compare_digest(path,expected): return self.respond({'error':'Niet gevonden.'},404)
-            return self.respond((self.store.dir/'filter.txt').read_bytes(),ctype='text/plain')
+            filename=path.rsplit('/',1)[-1];expected='/lists/'+self.store.feed_token+'/'+filename
+            if filename not in ('filter.txt','pihole-block.txt','pihole-allow.txt') or not hmac.compare_digest(path,expected):return self.respond({'error':'Niet gevonden.'},404)
+            raw=(self.store.dir/'filter.txt').read_text()
+            if filename!='filter.txt':
+                prefix='@@||' if filename=='pihole-allow.txt' else '||'
+                raw='# VenGuard DNS subscription\n'+'\n'.join(line for line in raw.splitlines() if line.startswith(prefix) and '$' not in line)+'\n'
+            return self.respond(raw,ctype='text/plain')
         if path=='/api/session': return self.respond({'authenticated':self.auth(),'account_configured':bool(self.store.account),'two_factor':bool((self.store.account or {}).get('totp_secret'))})
         if path.startswith('/api/'):
             if not self.auth(): return self.respond({'error':'Log eerst in.'},401)
             if path=='/api/state': return self.respond(self.store.snapshot())
+            if path=='/api/events':return self.respond({'events':copy.deepcopy(self.store.events),'rules':copy.deepcopy(self.store.live_results),'pending':copy.deepcopy(self.store.control_intents)})
             if path=='/api/account': return self.respond(self.store.account_public())
             if path=='/api/central-controls': return self.respond(self.store.read_controls())
             if path=='/api/central-filters': return self.respond(self.store.agh('filtering/status',settings=self.store.primary()))
@@ -292,7 +296,7 @@ class Handler(BaseHTTPRequestHandler):
                 d=domain(q.get('domain','')); result=self.store.agh('filtering/check_host',query={'name':d,'client':q.get('client',''),'qtype':q.get('type','A')},settings=self.store.selected(q.get('server','')))
                 return self.respond({'domain':d,'adguard':result,'explanation':explain(d),'note':'Dit is een actuele AdGuard-regelcontrole, geen DNS-verzoek vanaf je iPhone.'})
             if path=='/api/diagnostics':
-                return self.respond({'status':self.store.agh('status'),'filtering':self.store.agh('filtering/status'),'clients':self.store.agh('clients')})
+                return self.respond({'status':self.store.agh('status'),'filtering':self.store.agh('filtering/status'),'clients':self.store.agh('clients') if kind(self.store.primary())=='adguard' else {'clients':[],'unsupported':True}})
             if path=='/api/export':
                 with self.store.lock:
                     config=copy.deepcopy(self.store.config); config['adguard']={'url':config['adguard']['url'],'username':'','password':''}
@@ -363,8 +367,10 @@ class Handler(BaseHTTPRequestHandler):
                     s.config['primary_id']=sid
                 elif action=='save':
                     if current is None:
-                        if len(items)>=10:raise ValueError('Maximaal 10 AdGuard-servers.')
+                        if len(items)>=10:raise ValueError('Maximaal 10 DNS-servers.')
                         current={'id':secrets.token_hex(6),'password':''};items.append(current)
+                    previous_type=current.get('type','adguard');server_type=data.get('type',previous_type)
+                    if server_type not in ('adguard','pihole'):raise ValueError('Kies AdGuard Home of Pi-hole v6.')
                     url=valid_url(data.get('url',''))
                     if any(x['id']!=current['id'] and x['url'].removesuffix('/control')==url.removesuffix('/control') for x in items):raise ValueError('Dit AdGuard-adres staat al in de lijst.')
                     dns_host=str(data.get('dns_host','')).strip()
@@ -373,13 +379,15 @@ class Handler(BaseHTTPRequestHandler):
                     if not 1<=port<=65535:raise ValueError('Ongeldige DNS-poort.')
                     enabled=bool(data.get('enabled',True))
                     if current['id']==s.config['primary_id'] and not enabled:raise ValueError('Kies eerst een andere bronserver voordat je deze uitschakelt.')
-                    current.update(name=str(data.get('name') or 'AdGuard')[:100],url=url,username=str(data.get('username',''))[:200],dns_host=dns_host,dns_port=port,enabled=enabled)
+                    current.update(type=server_type,name=str(data.get('name') or ('Pi-hole' if server_type=='pihole' else 'AdGuard'))[:100],url=url,username=str(data.get('username',''))[:200],dns_host=dns_host,dns_port=port,enabled=enabled)
+                    if previous_type!=server_type and not data.get('password'):current['password']=''
                     if data.get('password'):current['password']=str(data['password'])
                     if data.get('clear_password'):current['password']=''
                     if not s.config['primary_id']:s.config['primary_id']=current['id']
                 else:raise ValueError('Onbekende serveractie.')
                 if s.sync_status['running']:raise ValueError('Wacht tot de synchronisatie is afgerond voordat je servers wijzigt.')
                 s.config['servers']=items;s.align_primary();s.changed();s.last_cluster_attempt=0
+                s.rules_pending=True
                 s.health.pop(sid,None);s.sync_status['results']={};s.sync_status['state']='queued' if s.config['cluster_sync']['enabled'] else 'idle'
             return self.respond({'ok':True})
         if path=='/api/hub/check':
@@ -405,26 +413,15 @@ class Handler(BaseHTTPRequestHandler):
             return self.respond({'ok':True})
         if path=='/api/cluster-sync':
             if not s.config['cluster_sync']['enabled']:raise ValueError('Schakel centrale synchronisatie eerst in bij Servers & Sync.')
-            s.request_cluster();return self.respond({'ok':True,'message':'Synchronisatie naar alle ingeschakelde replica’s is aangevraagd.'})
+            s.request_cluster(allow_dns=True);return self.respond({'ok':True,'message':'Synchronisatie naar alle ingeschakelde replica’s is aangevraagd.'})
         if path=='/api/central':return self.respond(s.central_write(data.get('section',''),data.get('value'),data.get('etag','')))
-        if path=='/api/central-protection':
-            origin=s.primary();s.backup_central(origin,'Vóór bescherming wijzigen')
-            s.agh('protection',{'enabled':bool(data.get('enabled')),'duration':0},settings=origin)
-            controls=s.read_controls()
-            if controls['protection_enabled'] is not bool(data.get('enabled')):raise ValueError('AdGuard bevestigt de gevraagde bescherming nog niet; controleer de actuele status.')
-            s.request_cluster();return self.respond({'ok':True,'controls':controls,'hub':s.hub_snapshot()})
-        if path=='/api/central-filtering':
-            interval=int(data.get('interval',s.agh('filtering/status',settings=s.primary()).get('interval',24)))
-            if interval not in (0,1,12,24,72,168):raise ValueError('Ongeldig filter-update-interval.')
-            s.agh('filtering/config',{'enabled':bool(data.get('enabled')),'interval':interval},settings=s.primary())
-            controls=s.read_controls()
-            if controls['filtering_enabled'] is not bool(data.get('enabled')):raise ValueError('AdGuard bevestigt de gevraagde DNS-filtering nog niet; controleer de actuele status.')
-            s.request_cluster();return self.respond({'ok':True,'controls':controls,'hub':s.hub_snapshot()})
+        if path in ('/api/central-protection','/api/central-filtering'):
+            return self.respond(s.set_controls('protection' if path.endswith('protection') else 'filtering',data.get('enabled')))
         if path=='/api/central-filters':
             origin=s.primary();status=s.agh('filtering/status',settings=origin);action=data.get('action')
             if action=='refresh':
                 s.agh('filtering/refresh',{'whitelist':False},settings=origin)
-                s.agh('filtering/refresh',{'whitelist':True},settings=origin)
+                if kind(origin)=='adguard':s.agh('filtering/refresh',{'whitelist':True},settings=origin)
             elif action in ('toggle','delete'):
                 whitelist=bool(data.get('whitelist'));items=status.get('whitelist_filters' if whitelist else 'filters',[])
                 item=next((f for f in items if f.get('url')==data.get('url')),None)
@@ -466,7 +463,6 @@ class Handler(BaseHTTPRequestHandler):
                     if hours not in (6,12,24,48): raise ValueError('Kies 6, 12, 24 of 48 uur.')
                     new['auto_refresh_hours']=hours
                 if 'categories' in data:new['categories']={k:bool(data['categories'].get(k,True)) for k in CATEGORIES}
-                if 'compatibility' in data:new['compatibility']={p['id']:bool(data['compatibility'].get(p['id'],False)) for p in COMPATIBILITY}
                 if 'auto_sync' in data: new['auto_sync']=bool(data['auto_sync'])
                 if 'packs' in data:
                     new['packs']={p['id']:bool(data['packs'].get(p['id'],False)) for p in PACKS}
@@ -499,6 +495,7 @@ class Handler(BaseHTTPRequestHandler):
                     else: raise ValueError('Ongeldige bronactie.')
                 s.changed(); s.request_build(fetch=True)
             return self.respond({'ok':True})
+        if path=='/api/live-rules':return self.respond(s.apply_live_rules())
         if path=='/api/rules':
             with s.lock:
                 action=data.get('action')
@@ -510,13 +507,17 @@ class Handler(BaseHTTPRequestHandler):
                     item['enabled']=bool(data.get('enabled'))
                 else:
                     if action not in ('block','allow'): raise ValueError('Kies blokkeren of toestaan.')
-                    d=domain(data.get('domain','')); client=scope(data.get('client',''))
+                    d=domain(data.get('domain','')); client=scope(data.get('client',''));match=data.get('match','exact')
+                    if match not in ('exact','suffix'):raise ValueError('Kies alleen dit domein of ook subdomeinen.')
+                    duration=int(data.get('duration',0))
+                    if duration not in (0,900,3600,86400):raise ValueError('Kies blijvend, 15 minuten, 1 uur of 1 dag.')
+                    if client and any(kind(x)=='pihole' and x.get('enabled',True) for x in s.servers()):raise ValueError('Apparaatregels vereisen Pi-hole-groepen en kunnen niet veilig over beide systemen worden toegepast. Laat apparaat leeg of gebruik Eigen beheer.')
                     retained=[r for r in s.config['rules'] if not (r['domain']==d and r.get('client','')==client)]
                     if len(retained)>=3000: raise ValueError('Maximaal 3.000 eigen regels.')
                     s.config['rules']=retained
-                    s.config['rules'].append({'id':secrets.token_hex(6),'domain':d,'action':action,'client':client,'note':str(data.get('note',''))[:500],'enabled':True,'created':utc()})
-                s.changed()
-            return self.respond({'ok':True,'message':'Eigen regel opgeslagen. De lijst wordt opnieuw opgebouwd.'})
+                    s.config['rules'].append({'id':secrets.token_hex(6),'domain':d,'action':action,'client':client,'note':str(data.get('note',''))[:500],'match':match,'expires_at':time.time()+duration if duration else None,'enabled':True,'created':utc()})
+                s.changed();s.rules_pending=True
+            applied=s.apply_live_rules();return self.respond({'ok':True,'applied':applied,'message':applied['message']})
         if path=='/api/build': s.request_build(fetch=bool(data.get('fetch',False))); return self.respond({'ok':True})
         if path=='/api/poll':
             try: rows=s.poll(); return self.respond({'ok':True,'count':len(rows)})
@@ -553,7 +554,7 @@ def main():
         logging.info('Beheerwachtwoord staat in het databestand admin-password. Bekijk dit alleen op je eigen host.')
     server=ThreadingHTTPServer(('0.0.0.0',int(os.getenv('VENGUARD_PORT','8098'))),Handler)
     server.store=store; server.daemon_threads=True
-    for target in (store.worker,store.monitor_worker,store.cluster_worker):
+    for target in (store.worker,store.monitor_worker,store.cluster_worker,store.operations_worker):
         threading.Thread(target=target,daemon=True).start()
     logging.info('VenGuard gestart op poort %s',server.server_port)
     try: server.serve_forever()

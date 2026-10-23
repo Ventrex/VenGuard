@@ -24,10 +24,12 @@ class AdGuard(BaseHTTPRequestHandler):
         path=self.path.split('?')[0];body=json.loads(self.rfile.read(int(self.headers.get('Content-Length',0))) or b'{}');s=self.server
         content='application/json'
         if path=='/control/status':out={'protection_enabled':s.protection,'version':'v0.107.test'}
-        elif path=='/control/filtering/status':out={'enabled':s.filtering,'interval':24,'filters':s.filters,'user_rules':[]}
+        elif path=='/control/filtering/status':out={'enabled':s.filtering,'interval':24,'filters':s.filters,'user_rules':getattr(s,'user_rules',[])}
         elif path=='/control/protection':
             if self.command=='POST':s.protection=body['enabled']
             out=b'OK\n';content='text/plain'
+        elif path=='/control/filtering/set_rules':s.user_rules=body['rules'];out=b'OK'
+        elif path=='/control/filtering/add_url':s.filters.append({'id':42,'enabled':True,**body});out={}
         elif path=='/control/filtering/config':s.filtering=body['enabled'];out=b'OK'
         elif path=='/control/filtering/set_url':
             for f in s.filters:
@@ -55,7 +57,7 @@ class ControlTests(unittest.TestCase):
         with self.opener.open(req,timeout=5) as r:return json.load(r)
     def test_plain_ok_actions_and_status_readback(self):
         r=self.call('central-protection',{'enabled':True});self.assertTrue(r['ok'])
-        health=r['hub']['servers'][0]['health'];self.assertTrue(health['protection_enabled']);self.assertFalse(health['filtering_enabled'])
+        health=r['hub']['servers'][0]['health'];self.assertTrue(health['protection_enabled']);self.assertFalse(self.call('central-controls')['filtering_enabled'])
         r=self.call('central-filtering',{'enabled':True});self.assertTrue(r['hub']['servers'][0]['health']['filtering_enabled'])
         self.call('central-protection',{'enabled':False});self.assertFalse(self.agh.protection)
     def test_html_is_never_success_even_for_actions(self):
@@ -77,8 +79,8 @@ class ControlTests(unittest.TestCase):
         self.assertNotIn('||adult.example.net^',(self.store.dir/'filter.txt').read_text())
         self.call('sources',{'action':'category','id':sid,'category':'custom'});self.store.rebuild(False)
         self.assertIn('||adult.example.net^',(self.store.dir/'filter.txt').read_text())
-        self.call('settings',{'compatibility':{'ing':True,'marktplaats':True}});self.store.rebuild(False)
-        text=(self.store.dir/'filter.txt').read_text();self.assertIn('@@||ing.nl^',text);self.assertIn('@@||marktplaats.nl^',text);self.assertNotIn('@@||akamaiedge.net^',text)
+        self.assertNotIn('compatibility',self.call('state'))
+
 
 class HealthRegressionTests(unittest.TestCase):
     def test_three_failed_checks_and_recovery(self):
@@ -92,7 +94,7 @@ class HealthRegressionTests(unittest.TestCase):
                 s.monitor();self.assertEqual(s.health['one']['state'],'down')
                 s.offline=set();s.monitor();self.assertEqual(s.health['one']['state'],'up');self.assertEqual(s.health['one']['failures'],0)
     def test_duplicates_are_exact_even_with_extra_packs_and_allows(self):
-        cfg={'mode':'all','sources':[{'id':'a','enabled':True},{'id':'b','enabled':True}], 'packs':{'dpg_ads':True},'rules':[], 'compatibility':{'ing':True}}
+        cfg={'mode':'all','sources':[{'id':'a','enabled':True},{'id':'b','enabled':True}], 'packs':{},'rules':[]}
         cache={'a':{'rules':['||ads.example.net^','@@||allowed.example.net^']},'b':{'rules':['||ads.example.net^']}}
         lines,stats,_=compose(cfg,cache,{})
         self.assertEqual(sum(s['duplicates'] for s in stats),1);self.assertEqual(lines.count('||ads.example.net^'),1)

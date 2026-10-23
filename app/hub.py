@@ -5,6 +5,8 @@ replicas are never promoted automatically while it is unavailable.
 """
 import base64
 import copy
+import errno
+import ssl
 import hashlib
 import ipaddress
 import json
@@ -19,6 +21,7 @@ import time
 import urllib.error
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
+from providers import kind
 from datetime import datetime,timezone
 from pathlib import Path
 
@@ -48,12 +51,17 @@ SECTIONS={
 
 def now_iso():return datetime.now(timezone.utc).isoformat(timespec='seconds')
 def error_text(e):
-    if isinstance(e,urllib.error.HTTPError):return f'Beheer-API antwoordt met HTTP {e.code}; controleer adres en inloggegevens.'
+    if isinstance(e,urllib.error.HTTPError):return f'Beheer-API: HTTP {e.code}. '+('Inloggegevens of API-rechten geweigerd.' if e.code in (401,403) else 'Controleer het beheeradres en de serverlog.')
     if isinstance(e,ValueError):return str(e)
     reason=getattr(e,'reason',e)
-    if isinstance(reason,(TimeoutError,socket.timeout)):return 'Beheer-API: verbinding verlopen; controleer bereikbaarheid vanaf de VenGuard-container.'
-    if isinstance(reason,ConnectionRefusedError):return 'Beheer-API: verbinding geweigerd; controleer de beheerpoort en of AdGuard draait.'
-    return 'Geen verbinding of ongeldige reactie; controleer adres, poort, certificaat en netwerk.'
+    if isinstance(reason,ssl.SSLCertVerificationError):return 'HTTPS-certificaat geweigerd; controleer de certificaatketen en hostnaam.'
+    if isinstance(reason,ssl.SSLError):return 'TLS-verbinding mislukt; controleer de HTTPS-poort en TLS-configuratie.'
+    if isinstance(reason,socket.gaierror):return 'De DNS-naam van het beheeradres kan vanaf VenGuard niet worden opgelost.'
+    if isinstance(reason,(TimeoutError,socket.timeout)):return 'Beheer-API: timeout na maximaal 12 seconden. Controleer bereikbaarheid en of de server opnieuw wordt geconfigureerd.'
+    if isinstance(reason,ConnectionRefusedError):return 'Beheer-API: verbinding geweigerd. Controleer de beheerpoort en of de dienst draait.'
+    if isinstance(reason,ConnectionResetError):return 'De server heeft de beheerverbinding verbroken. VenGuard controleert de werkelijke stand opnieuw.'
+    if getattr(reason,'errno',None) in (errno.EHOSTUNREACH,errno.ENETUNREACH):return 'Geen netwerkroute naar het beheeradres vanaf VenGuard. Controleer host, firewall en Docker-netwerk.'
+    return 'Beheerverbinding mislukt; de actuele stand is niet bevestigd. Controleer de server en de recente acties in VenGuard.'
 def digest(value):return hashlib.sha256(json.dumps(value,sort_keys=True,separators=(',',':')).encode()).hexdigest()
 def write_private(path,value):
     temp=path.with_name(path.name+'.tmp')
@@ -132,7 +140,7 @@ class HubMixin:
         if self.sync_status['state'] in ('running','queued'):
             self.sync_status.update(state='error',error='De vorige ronde is onderbroken; start opnieuw om de actuele toestand te controleren.')
         (self.dir/'adguard-sync-runtime.yaml').unlink(missing_ok=True)
-        self.last_cluster_attempt=0
+        self.last_cluster_attempt=0;self.allow_dns_sync=False;self.last_live_attempt=0
     def servers(self):
         with self.lock:
             data=copy.deepcopy(self.config.get('servers',[]))
@@ -156,6 +164,7 @@ class HubMixin:
         origin=next((s for s in items if s['id']==self.config.get('primary_id')),None)
         if origin:
             self.config['adguard']={k:origin.get(k,'') for k in ['url','username','password']}
+            self.config['adguard']['type']=kind(origin)
     def hub_snapshot(self):
         with self.lock:
             items=[]
@@ -167,7 +176,7 @@ class HubMixin:
                 server['health']=health;server['feed']=copy.deepcopy(self.feed_results.get(server['id'],{}));items.append(server)
             return {'servers':items,'primary_id':self.config.get('primary_id') or (items[0]['id'] if items else ''),
                     'sync':copy.deepcopy(self.sync_status),'features':[{'id':k,'name':v[0]} for k,v in FEATURES.items()],
-                    'checked':self.health_checked,'binary_available':bool(shutil.which(os.getenv('ADGUARD_SYNC_BINARY','adguardhome-sync')))}
+                    'checked':self.health_checked,'live_results':copy.deepcopy(getattr(self,'live_results',{})),'pending_controls':copy.deepcopy(getattr(self,'control_intents',{})),'events':copy.deepcopy(getattr(self,'events',[]))[-20:],'binary_available':bool(shutil.which(os.getenv('ADGUARD_SYNC_BINARY','adguardhome-sync')))}
     def read_controls(self):
         origin=self.primary();status=self.agh('status',settings=origin);filtering=self.agh('filtering/status',settings=origin)
         result={'protection_enabled':status.get('protection_enabled'),'filtering_enabled':filtering.get('enabled'),'controls_checked_at':now_iso(),'controls_epoch':time.time()}
@@ -218,26 +227,31 @@ class HubMixin:
                 with self.lock:self.poll_error=error_text(e)
             self.stop.wait(30)
     def publish_all(self):
-        url=self.feed_url();items=[s for s in self.servers() if s.get('enabled',True)]
-        if not items:raise ValueError('Voeg eerst een AdGuard-server toe.')
+        items=[s for s in self.servers() if s.get('enabled',True)]
+        if not items:raise ValueError('Voeg eerst een DNS-server toe.')
         with self.agh_lock:
             rev=self.revision
-            def publish(s):
+            def publish(server):
                 try:
-                    status=self.agh('filtering/status',settings=s)
-                    found=next((f for f in status.get('filters',[]) if f.get('url')==url),None)
-                    if found is None:self.agh('filtering/add_url',{'name':'VenGuard Custom DNS','url':url,'whitelist':False},settings=s)
-                    elif not found.get('enabled'):
-                        self.agh('filtering/set_url',{'url':url,'whitelist':False,'data':{'url':url,'name':found.get('name','VenGuard Custom DNS'),'enabled':True}},settings=s)
-                    self.agh('filtering/refresh',{'whitelist':False},settings=s)
-                    return s['id'],{'ok':True,'at':now_iso(),'revision':rev,'error':''}
-                except Exception as e:return s['id'],{'ok':False,'at':now_iso(),'revision':rev,'error':error_text(e)}
-            with ThreadPoolExecutor(max_workers=8) as pool:results=dict(pool.map(publish,items))
+                    if kind(server)=='pihole':
+                        for filename,whitelist in [('pihole-block.txt',False),('pihole-allow.txt',True)]:self.ensure_feed(server,self.feed_url(filename),whitelist)
+                        self.agh('filtering/refresh',{'whitelist':False},settings=server)
+                    else:
+                        self.ensure_feed(server,self.feed_url(),False)
+                        self.agh('filtering/refresh',{'whitelist':False},settings=server)
+                    return server['id'],{'ok':True,'at':now_iso(),'revision':rev,'error':''}
+                except Exception as e:return server['id'],{'ok':False,'at':now_iso(),'revision':rev,'error':error_text(e)}
+            with ThreadPoolExecutor(max_workers=4) as pool:results=dict(pool.map(publish,items))
             with self.lock:
                 self.feed_results.update(results);ok=all(r['ok'] for r in results.values())
-                self.job['sync_error']='; '.join(s['name']+': '+results[s['id']]['error'] for s in items if not results[s['id']]['ok'])
+                self.job['sync_error']='; '.join(server['name']+': '+results[server['id']]['error'] for server in items if not results[server['id']]['ok'])
                 if ok:self.job['last_sync']=now_iso();self.last_synced_revision=rev
-        return {'ok':ok,'partial':not ok,'results':results,'url':url,'message':f"Lijst aangeboden aan {sum(r['ok'] for r in results.values())} van {len(items)} servers. Offline servers worden later opnieuw geprobeerd."}
+        return {'ok':ok,'partial':not ok,'results':results,'url':self.feed_url(),'message':f"Lijst aangeboden aan {sum(r['ok'] for r in results.values())} van {len(items)} servers. Niet bereikbare servers worden later opnieuw geprobeerd."}
+    def ensure_feed(self,server,url,whitelist):
+        status=self.agh('filtering/status',settings=server)
+        found=next((f for f in status.get('whitelist_filters' if whitelist else 'filters',[]) if f.get('url')==url),None)
+        if found is None:self.agh('filtering/add_url',{'name':'VenGuard uitzonderingen' if whitelist else 'VenGuard Custom DNS','url':url,'whitelist':whitelist},settings=server)
+        elif not found.get('enabled'):self.agh('filtering/set_url',{'url':url,'whitelist':whitelist,'data':{'url':url,'name':found.get('name','VenGuard'),'enabled':True}},settings=server)
     def poll_cluster_logs(self):
         items=[s for s in self.servers() if s.get('enabled',True)]
         if not items:raise ValueError('Voeg eerst een AdGuard-server toe.')
@@ -265,7 +279,8 @@ class HubMixin:
             write_private(self.dir/'observed.json',self.observed)
             if self.config['mode']=='observed':self.request_build()
         return self.last_log
-    def request_cluster(self):
+    def request_cluster(self,allow_dns=False):
+        if allow_dns:self.allow_dns_sync=True
         self.cluster_event.set()
         with self.lock:
             if not self.sync_status['running']:self.sync_status['state']='queued'
@@ -286,7 +301,7 @@ class HubMixin:
         except Exception:snapshot['errors'].append('filtering')
         write_private(folder/(str(time.time_ns())+'.json'),snapshot)
         for p in sorted(folder.glob('*.json'))[:-20]:p.unlink()
-    def run_cluster(self):
+    def run_cluster(self,allow_dns=False):
         if not self.cluster_lock.acquire(blocking=False):return {'ok':False,'message':'Synchronisatie is al bezig.'}
         config_path=self.dir/'adguard-sync-runtime.yaml'
         try:
@@ -294,7 +309,15 @@ class HubMixin:
                 options=copy.deepcopy(self.config['cluster_sync']);pid=self.config.get('primary_id') or self.primary()['id']
                 self.sync_status.update(state='running',running=True,last_attempt=now_iso(),error='')
             if not options['enabled']:raise ValueError('Schakel centrale synchronisatie eerst in.')
-            items=self.servers();config=native_config(items,pid,options)
+            all_items=self.servers();items=[s for s in all_items if kind(s)=='adguard']
+            active=[s for s in items if s.get('enabled',True)]
+            if not any(s['id']==pid for s in active) or len(active)<2:
+                results={sid:{'state':'success' if value.get('ok') else 'error','message':'Gedeelde VenGuard-lijst: '+('aangeboden' if value.get('ok') else value.get('error','niet bevestigd'))} for sid,value in self.feed_results.items()}
+                self.sync_status.update(state='success' if results and all(r['state']=='success' for r in results.values()) else 'partial' if results else 'idle',results=results,error='Geavanceerde instellingen worden uitsluitend tussen AdGuard-servers met een AdGuard-bron gekopieerd. Pi-hole gebruikt de gedeelde lijsten en domeinregels.')
+                if self.sync_status['state']=='success':self.sync_status['last_success']=now_iso()
+                return {'ok':self.sync_status['state']=='success','status':copy.deepcopy(self.sync_status)}
+            if not allow_dns:options['features']['dns']=False
+            config=native_config(items,pid,options)
             binary=shutil.which(os.getenv('ADGUARD_SYNC_BINARY','adguardhome-sync'))
             if not binary:raise ValueError('AdGuard Sync ontbreekt. Werk het Docker-image bij met bash update.sh.')
             # Never clone an unavailable origin or silently select a new authority.
@@ -340,16 +363,18 @@ class HubMixin:
             self.cluster_event.wait(1)
             with self.lock:enabled=self.config['cluster_sync']['enabled'];minutes=self.config['cluster_sync']['interval_minutes']
             if self.cluster_event.is_set() or (enabled and time.time()-self.last_cluster_attempt>minutes*60):
-                self.cluster_event.clear()
-                if self.config.get('public_url') and self.config.get('auto_sync'):
+                self.cluster_event.clear();allow_dns=self.allow_dns_sync;self.allow_dns_sync=False
+                if self.config.get('public_url') and self.config.get('auto_sync') and (self.last_synced_revision!=self.revision or bool(self.job['sync_error'])):
                     try:self.publish_all()
                     except Exception as e:
                         with self.lock:self.job['sync_error']=error_text(e)
-                if enabled:self.run_cluster()
+                if enabled:self.run_cluster(allow_dns=allow_dns)
     def central_read(self,section,sid=''):
         spec=SECTIONS.get(section)
         if not spec:raise ValueError('Onbekend instellingenonderdeel.')
-        server=self.selected(sid);value=self.agh(spec['get'],settings=server)
+        server=self.selected(sid)
+        if kind(server)!='adguard':raise ValueError('Deze geavanceerde editor is voor AdGuard Home. Gebruik voor Pi-hole de gedeelde lijsten en domeinregels of Eigen beheer.')
+        value=self.agh(spec['get'],settings=server)
         if spec.get('key'):value=value.get(spec['key'],[])
         if spec.get('keys'):value={k:v for k,v in value.items() if k in spec['keys']}
         return {'section':section,'name':spec['name'],'value':value,'etag':digest(value),'server_id':server['id']}
@@ -371,5 +396,5 @@ class HubMixin:
             body=value
         self.backup_central(server,'Vóór centraal wijzigen van '+section)
         self.agh(spec['set'],body,settings=server,method=spec.get('method','POST'))
-        self.request_cluster()
+        self.request_cluster(allow_dns=section in ('dns','access'))
         return {'ok':True,'message':'Opgeslagen op de bronserver. Synchronisatie naar replica’s is aangevraagd.'}

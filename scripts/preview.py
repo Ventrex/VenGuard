@@ -25,10 +25,11 @@ class DemoStore(Store):
         if path=='dns_info':return {'upstream_dns':['https://dns.example.org/dns-query'],'bootstrap_dns':['1.1.1.1']}
         if path=='rewrite/list':return [{'domain':'nas.home.arpa','answer':'192.0.2.20','enabled':True}]
         if path=='querylog/config':return {'enabled':True,'interval':86400000,'anonymize_client_ip':False}
-        if path=='filtering/status': return {'enabled':self.filtering,'filters':[],'user_rules':[]}
+        if path=='filtering/status': return {'enabled':self.filtering,'filters':[],'user_rules':getattr(self,'demo_rules',[])}
+        if path=='filtering/set_rules':self.demo_rules=body['rules'];return {}
         if path=='clients': return {'clients':[]}
         if path=='querylog':
-            return {'data':[{'time':utc(),'client':'192.0.2.83','client_info':{'name':'Demo iPhone'},'question':{'name':d,'type':'A'},'reason':r,'status':'NOERROR','rules':[]} for d,r in [('advertising-module.api.dpgmedia.cloud','NotFilteredNotFound'),('tracking-module.api.dpgmedia.cloud','FilteredBlackList'),('login.dpgmedia.net','NotFilteredNotFound'),('unknown.example.net','NotFilteredNotFound')]]}
+            return {'data':[{'time':utc(),'client':'192.0.2.83','client_info':{'name':'Demo iPhone'},'question':{'name':d,'type':'A'},'reason':r,'status':'NOERROR','rules':[]} for d,r in [('ads.example.net','FilteredBlackList'),('checkout.example.net','FilteredBlackList'),('content.example.net','NotFilteredNotFound'),('unknown.example.net','NotFilteredNotFound')]]}
         if path=='filtering/check_host': return {'reason':'NotFilteredNotFound','rules':[]}
         return {}
 
@@ -42,7 +43,7 @@ if __name__=='__main__':
     store.config['public_url']='http://demo-venguard.invalid:8098'
     store.config['auto_sync']=False
     store.config['sources'][0]['name']='DEMO — HaGeZi Light (testselectie)'
-    store.caches={'hagezi-light':{'rules':['||ads.example.net^','||advertising-module.api.dpgmedia.cloud^'],'counts':{},'fetched':utc()}}
+    store.caches={'hagezi-light':{'rules':['||ads.example.net^','||metrics.example.net^'],'counts':{},'fetched':utc()}}
     store.monitor();store.rebuild(False);store.poll()
     server=ThreadingHTTPServer(('0.0.0.0',4173),DemoHandler);server.store=store
     print('DISPOSABLE UI DEMO at http://localhost:4173 — no production data',flush=True)
