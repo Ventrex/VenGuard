@@ -53,8 +53,7 @@ jobs:
           PY
       - name: Test de gebundelde echte AdGuard Sync-engine
         run: |
-          docker cp tests/test_native_sync.py venguard:/tmp/test_native_sync.py
-          docker exec -e ADGUARD_SYNC_BINARY=/usr/local/bin/adguardhome-sync venguard python3 /tmp/test_native_sync.py
+          docker exec -i -e ADGUARD_SYNC_BINARY=/usr/local/bin/adguardhome-sync venguard python3 -c "import sys; __file__='/tmp/test_native_sync.py'; exec(compile(sys.stdin.read(), __file__, 'exec'))" < tests/test_native_sync.py
       - name: Opruimen
         if: always()
         run: docker compose down || true
